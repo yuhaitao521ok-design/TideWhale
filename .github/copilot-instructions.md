@@ -42,30 +42,50 @@ Every user-facing string must work in **简体中文 / 繁體中文 / English**.
 
 
 
-This repo has a minimal script setup; there is no dedicated lint or test runner configured in `package.json` today.
-
 Use these commands:
 
 ```bash
 npm install
-cp .env.example .env.local   # optional: only needed for Perplexity AI insight
+cp .env.example .env.local   # optional: only needed for LLM features (see lib/llm.ts)
 npm run dev
 ```
 
-Production validation:
+Local gates (all must pass before opening a PR; the workflow below requires the same list):
 
 ```bash
-npm run build
-npm run start
+npm run typecheck   # tsc --noEmit
+npm test            # scripts/test.mjs bundles tests/*.test.ts with esbuild, then runs node --test
+npm run check:i18n  # three-locale coverage: must report 0 missing and ~100%
 ```
 
-Type-checking (the repo's explicit validation script):
+Build validation:
 
 ```bash
-npm run typecheck
+npm run build       # next build only: local `npm start` / Vercel
+npm run build:cf    # next build + OpenNext: required before deploying to Cloudflare Workers
 ```
 
-If you need to validate a focused change without a full suite, prefer `npm run typecheck` plus a targeted app/build check. There are no per-file Jest/Vitest tests or lint commands in this repo at the moment.
+`npm run dev` and `npm test` work without any API key. There is no ESLint/Prettier configuration and no Jest/Vitest runner: unit tests live in `tests/*.test.ts` and are executed by `scripts/test.mjs` through `node --test`.
+
+## Local tooling setup (issue / PR workflow)
+
+The workflow below uses the GitHub CLI. Install and authenticate once; afterwards every `gh` call and `git push` runs non-interactively:
+
+```bash
+winget install --id GitHub.cli -e   # Windows; brew install gh / apt install gh elsewhere
+gh auth login --web --git-protocol https
+gh auth setup-git                   # routes git credentials through gh so push never prompts
+```
+
+If `gh` is missing, do **not** hand-roll REST calls with a token pulled from the git credential manager: that path triggers an interactive OAuth prompt on every request.
+
+## Cross-platform script rules
+
+Everything under `scripts/` must run on Windows, macOS and Linux (this repo is developed on both Windows and Linux agents):
+
+- take file names with `basename()` from `node:path`, never `path.slice(path.lastIndexOf("/") + 1)`;
+- resolve the repo root with `fileURLToPath(new URL("..", import.meta.url))`, never `new URL("..", import.meta.url).pathname` (on Windows the latter yields `/D:/...` and breaks after `path.join()`);
+- compose paths with `join()` instead of hard-coded `/`.
 
 ## Key conventions
 
