@@ -24,18 +24,31 @@ import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 const PRODUCTION_BRANCH = process.env.PRODUCTION_BRANCH || "main";
-const branch = process.env.WORKERS_CI_BRANCH;
+const branch = process.env.WORKERS_CI_BRANCH?.trim();
 const isWorkersBuild = Boolean(process.env.WORKERS_CI);
-// 以 WORKERS_CI_BRANCH 为准（Workers Builds 一定会注入）；本地不设置该变量就不会触发。
 const isPreviewBuild = Boolean(branch) && branch !== PRODUCTION_BRANCH;
 
 const assetsDir = join(process.cwd(), ".open-next", "assets");
+
+if (isWorkersBuild && !branch) {
+  console.error(
+    "[cf-preview] Workers CI detected, but WORKERS_CI_BRANCH is missing; refusing to continue because the production/preview branch cannot be determined.",
+  );
+  process.exit(1);
+}
 
 if (!isPreviewBuild) {
   const where = branch
     ? `生产分支 ${branch}${isWorkersBuild ? "（Workers Builds）" : ""}`
     : "本地 / 非 Workers Builds 构建";
   console.log(`[cf-preview] ${where}：保留 _headers / _redirects`);
+  process.exit(0);
+}
+
+if (!existsSync(assetsDir)) {
+  console.log(
+    `[cf-preview] 预览分支 ${branch}：.open-next/assets 不存在，无需处理`,
+  );
   process.exit(0);
 }
 
