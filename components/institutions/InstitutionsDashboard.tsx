@@ -6,7 +6,10 @@ import { useI18n } from "@/lib/i18n";
 import { formatCompact, formatNumber, formatPercent } from "@/lib/format";
 import {
   SUPER_INVESTORS,
-  aggregateTopChanges,
+  aggregateTopChangesForQuarter,
+  collectReportQuarters,
+  countQuarterCoverage,
+  findQuarterChange,
   pearsonCorrelation,
   type AggregatedChange,
   type PositionChange,
@@ -218,11 +221,13 @@ function MiniTrend({ quarters }: { quarters: QuarterChange[] }) {
 function OverviewCard({
   investor,
   entry,
+  quarter,
   onOpen,
   onRetry,
 }: {
   investor: (typeof SUPER_INVESTORS)[number];
   entry: OverviewEntry;
+  quarter: string | null;
   onOpen: () => void;
   onRetry: () => void;
 }) {
@@ -264,9 +269,15 @@ function OverviewCard({
 
   const filing = entry.filing;
   const latest = filing.quarters[0];
-  const net = latest ? latest.buysValue - latest.sellsValue : 0;
-  const topBuy = latest?.buys[0];
-  const topSell = latest?.sells[0];
+  const latestNet = latest ? latest.buysValue - latest.sellsValue : 0;
+  // 只取所选报告期的调仓；该季度未申报时卡片单独展示「本期未披露」
+  const change = findQuarterChange(filing.quarters, quarter);
+  const net = change ? change.buysValue - change.sellsValue : 0;
+  const topBuy = change?.buys[0];
+  const topSell = change?.sells[0];
+  const trendQuarters = quarter
+    ? filing.quarters.filter((item) => item.quarter <= quarter)
+    : filing.quarters;
   const changeLabel = (item: PositionChange) =>
     item.action === "new"
       ? t("新建仓")
@@ -289,57 +300,86 @@ function OverviewCard({
           </p>
         </div>
         <span className="num shrink-0 rounded bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">
-          {quarterLabel(filing.period)}
+          {quarterLabel(quarter)}
+          {!change && <span className="ml-1 text-muted-foreground/60">· {t("未披露")}</span>}
         </span>
       </div>
 
-      <div className="flex items-end justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[9px] text-muted-foreground">{t("本季净额")}</p>
-          <p
-            className={`num text-[18px] font-medium leading-tight ${
-              net >= 0 ? "text-positive-text" : "text-negative-text"
-            }`}
-          >
-            {signedMoney(net)}
-          </p>
-          <p className="truncate text-[9px] text-muted-foreground">
-            {net >= 0 ? t("净买入") : t("净卖出")} · {t("持仓")} {filing.totalPositions}
-          </p>
+      {!change ? (
+        <div className="flex flex-1 flex-col justify-between gap-2 border-t border-border/60 pt-2">
+          <div>
+            <p className="text-[10.5px] font-medium text-muted-foreground">{t("本期未披露")}</p>
+            <p className="mt-1 text-[9.5px] text-muted-foreground/80">
+              {t("最新一期")} <span className="num">{quarterLabel(filing.period)}</span>
+              <span className="mx-1 text-muted-foreground/50">·</span>
+              {t("最新净额")}{" "}
+              <span
+                className={`num ${latestNet >= 0 ? "text-positive-text" : "text-negative-text"}`}
+              >
+                {signedMoney(latestNet)}
+              </span>
+            </p>
+          </div>
+          <div className="flex items-center justify-between text-[9px] text-muted-foreground/70">
+            <span>
+              {t("提交日")} <span className="num">{filing.filedAt ?? "--"}</span>
+            </span>
+            <span className="text-accent">{t("查看详情")} →</span>
+          </div>
         </div>
-        <div className="shrink-0">
-          <MiniTrend quarters={filing.quarters} />
-          <p className="mt-0.5 text-right text-[8.5px] text-muted-foreground/70">{t("近 3 季")}</p>
-        </div>
-      </div>
+      ) : (
+        <>
+          <div className="flex items-end justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[9px] text-muted-foreground">{t("本季净额")}</p>
+              <p
+                className={`num text-[18px] font-medium leading-tight ${
+                  net >= 0 ? "text-positive-text" : "text-negative-text"
+                }`}
+              >
+                {signedMoney(net)}
+              </p>
+              <p className="truncate text-[9px] text-muted-foreground">
+                {net >= 0 ? t("净买入") : t("净卖出")} · {t("持仓")} {filing.totalPositions}
+              </p>
+            </div>
+            <div className="shrink-0">
+              <MiniTrend quarters={trendQuarters} />
+              <p className="mt-0.5 text-right text-[8.5px] text-muted-foreground/70">
+                {t("近 3 季")}
+              </p>
+            </div>
+          </div>
 
-      <div className="space-y-1 border-t border-border/60 pt-2">
-        <div className="flex items-baseline gap-1.5 text-[10px]">
-          <span className="w-7 shrink-0 text-positive-text">{t("加仓")}</span>
-          <span className="min-w-0 flex-1 truncate text-foreground/85" title={topBuy?.cusip}>
-            {topBuy?.issuer ?? "--"}
-          </span>
-          <span className="num shrink-0 text-positive-text">
-            {topBuy ? changeLabel(topBuy) : "--"}
-          </span>
-        </div>
-        <div className="flex items-baseline gap-1.5 text-[10px]">
-          <span className="w-7 shrink-0 text-negative-text">{t("减仓")}</span>
-          <span className="min-w-0 flex-1 truncate text-foreground/85" title={topSell?.cusip}>
-            {topSell?.issuer ?? "--"}
-          </span>
-          <span className="num shrink-0 text-negative-text">
-            {topSell ? changeLabel(topSell) : "--"}
-          </span>
-        </div>
-      </div>
+          <div className="space-y-1 border-t border-border/60 pt-2">
+            <div className="flex items-baseline gap-1.5 text-[10px]">
+              <span className="w-7 shrink-0 text-positive-text">{t("加仓")}</span>
+              <span className="min-w-0 flex-1 truncate text-foreground/85" title={topBuy?.cusip}>
+                {topBuy?.issuer ?? "--"}
+              </span>
+              <span className="num shrink-0 text-positive-text">
+                {topBuy ? changeLabel(topBuy) : "--"}
+              </span>
+            </div>
+            <div className="flex items-baseline gap-1.5 text-[10px]">
+              <span className="w-7 shrink-0 text-negative-text">{t("减仓")}</span>
+              <span className="min-w-0 flex-1 truncate text-foreground/85" title={topSell?.cusip}>
+                {topSell?.issuer ?? "--"}
+              </span>
+              <span className="num shrink-0 text-negative-text">
+                {topSell ? changeLabel(topSell) : "--"}
+              </span>
+            </div>
+          </div>
 
-      <div className="flex items-center justify-between text-[9px] text-muted-foreground/70">
-        <span className="num">
-          {t("加仓")} {latest?.buysCount ?? 0} · {t("减仓")} {latest?.sellsCount ?? 0}
-        </span>
-        <span className="text-accent">{t("查看详情")} →</span>
-      </div>
+          <div className="flex items-center justify-between text-[9px] text-muted-foreground/70">
+            <span className="num">
+              {t("加仓")} {change.buysCount} · {t("减仓")} {change.sellsCount}
+            </span>
+            <span className="text-accent">{t("查看详情")} →</span>
+          </div>
+        </>
+      )}
     </button>
   );
 }
@@ -518,7 +558,7 @@ function AggregatedChangeList({
         </ol>
       )}
       <p className="border-t border-border/60 px-3 py-1.5 text-[9px] text-muted-foreground/70">
-        {t("按本季股数变动 × 季末价估算；聚合每位名人本季前 30 个调仓标的（不含期权）")}
+        {t("按本季股数变动 × 季末价估算；聚合每位名人该季加仓 / 减仓前 10 名（不含期权）")}
       </p>
     </div>
   );
@@ -546,12 +586,15 @@ export default function InstitutionsDashboard() {
   const [overview, setOverview] = useState<Record<string, OverviewEntry>>({});
   const [overviewStarted, setOverviewStarted] = useState(false);
   const [overviewHydrated, setOverviewHydrated] = useState(false);
+  const [overviewQuarter, setOverviewQuarter] = useState<string | null>(null);
   const overviewDirtyRef = useRef(false);
+  const overviewForceRef = useRef(false);
 
   const [corr, setCorr] = useState<Record<string, CorrelationEntry>>({});
   const [corrStarted, setCorrStarted] = useState(false);
   const [corrHydrated, setCorrHydrated] = useState(false);
   const corrDirtyRef = useRef(false);
+  const corrForceRef = useRef(false);
   const [corrFocusId, setCorrFocusId] = useState(SUPER_INVESTORS[0].id);
   const [overviewFilter, setOverviewFilter] = useState<"all" | "buy" | "sell">("all");
   const [overviewSort, setOverviewSort] = useState<"netDesc" | "netAsc" | "name">("netDesc");
@@ -575,11 +618,12 @@ export default function InstitutionsDashboard() {
     }
   }, []);
 
-  const loadFiling = useCallback(async (id: string) => {
+  const loadFiling = useCallback(async (id: string, force = false) => {
     setFilingLoading(true);
     setFilingError(null);
     try {
-      const response = await fetch(`/api/institutions/13f?investor=${id}`, { cache: "no-store" });
+      const url = `/api/institutions/13f?investor=${id}${force ? "&refresh=1" : ""}`;
+      const response = await fetch(url, { cache: "no-store" });
       if (!response.ok) {
         const body = (await response.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error || `加载失败（${response.status}）`);
@@ -593,15 +637,14 @@ export default function InstitutionsDashboard() {
     }
   }, []);
 
-  const loadOverviewInvestor = useCallback(async (id: string) => {
+  const loadOverviewInvestor = useCallback(async (id: string, force = false) => {
     setOverview((prev) => ({ ...prev, [id]: { status: "loading" } }));
     let lastError: unknown = null;
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const response = await fetch(`/api/institutions/13f?investor=${id}&summary=1`, {
-          cache: "no-store",
-        });
+        const url = `/api/institutions/13f?investor=${id}&summary=1${force ? "&refresh=1" : ""}`;
+        const response = await fetch(url, { cache: "no-store" });
         if (!response.ok) {
           const body = (await response.json().catch(() => ({}))) as { error?: string };
           throw new Error(body.error || `加载失败（${response.status}）`);
@@ -678,10 +721,12 @@ export default function InstitutionsDashboard() {
       for (;;) {
         const id = queue.shift();
         if (!id) return;
-        await loadOverviewInvestor(id);
+        await loadOverviewInvestor(id, overviewForceRef.current);
       }
     };
-    void Promise.all([worker(), worker(), worker()]);
+    void Promise.all([worker(), worker(), worker()]).finally(() => {
+      overviewForceRef.current = false;
+    });
   }, [tab, overviewStarted, overviewHydrated, overview, loadOverviewInvestor]);
 
   // 缓存已加载的摘要，供下次打开秒开（仅在本轮真正拉到新数据时刷新时间戳）
@@ -710,20 +755,22 @@ export default function InstitutionsDashboard() {
     } catch {
       // ignore
     }
+    overviewForceRef.current = true;
     setOverview({});
+    setOverviewQuarter(null);
     setOverviewStarted(false);
   }, []);
 
-  const loadCorrelationInvestor = useCallback(async (id: string) => {
+  const loadCorrelationInvestor = useCallback(async (id: string, force = false) => {
     setCorr((prev) => ({ ...prev, [id]: { status: "loading" } }));
     let lastError: unknown = null;
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const response = await fetch(
-          `/api/institutions/correlation?investor=${id}&quarters=8`,
-          { cache: "no-store" },
-        );
+        const url = `/api/institutions/correlation?investor=${id}&quarters=8${
+          force ? "&refresh=1" : ""
+        }`;
+        const response = await fetch(url, { cache: "no-store" });
         if (!response.ok) {
           const body = (await response.json().catch(() => ({}))) as { error?: string };
           throw new Error(body.error || `加载失败（${response.status}）`);
@@ -790,10 +837,12 @@ export default function InstitutionsDashboard() {
       for (;;) {
         const id = queue.shift();
         if (!id) return;
-        await loadCorrelationInvestor(id);
+        await loadCorrelationInvestor(id, corrForceRef.current);
       }
     };
-    void Promise.all([worker(), worker(), worker()]);
+    void Promise.all([worker(), worker(), worker()]).finally(() => {
+      corrForceRef.current = false;
+    });
   }, [tab, corrStarted, corrHydrated, corr, loadCorrelationInvestor]);
 
   // 缓存收益序列
@@ -822,6 +871,7 @@ export default function InstitutionsDashboard() {
     } catch {
       // ignore
     }
+    corrForceRef.current = true;
     setCorr({});
     setCorrStarted(false);
   }, []);
@@ -903,14 +953,42 @@ export default function InstitutionsDashboard() {
   );
   const maxTopWeight = topHoldings[0]?.weight ?? 0;
 
+  const loadedFilings = useMemo(() => {
+    const list: ThirteenFSummary[] = [];
+    for (const investor of SUPER_INVESTORS) {
+      const entry = overview[investor.id];
+      if (entry?.status === "done" && entry.filing) list.push(entry.filing);
+    }
+    return list;
+  }, [overview]);
+
+  // 所有已加载摘要里出现过的报告期（新→旧），用于季度切换
+  const overviewQuarters = useMemo(() => collectReportQuarters(loadedFilings), [loadedFilings]);
+
+  // 首次加载默认选中最新报告期；用户手动切换后保留选择，仅当该季度不在数据里时回退
+  useEffect(() => {
+    if (overviewQuarters.length === 0) return;
+    if (!overviewQuarter || !overviewQuarters.includes(overviewQuarter)) {
+      setOverviewQuarter(overviewQuarters[0]);
+    }
+  }, [overviewQuarter, overviewQuarters]);
+
+  const quarterCoverage = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const quarter of overviewQuarters) {
+      map.set(quarter, countQuarterCoverage(loadedFilings, quarter));
+    }
+    return map;
+  }, [loadedFilings, overviewQuarters]);
+
   const overviewRows = useMemo(() => {
     const rows = SUPER_INVESTORS.map((investor) => ({
       investor,
       entry: overview[investor.id] ?? { status: "loading" as const },
     }));
     const netOf = (entry: OverviewEntry): number | null => {
-      const latest = entry.filing?.quarters[0];
-      return latest ? latest.buysValue - latest.sellsValue : null;
+      const current = findQuarterChange(entry.filing?.quarters, overviewQuarter);
+      return current ? current.buysValue - current.sellsValue : null;
     };
     const filtered = rows.filter(({ entry }) => {
       if (overviewFilter === "all") return true;
@@ -935,43 +1013,50 @@ export default function InstitutionsDashboard() {
       if (bNet === null) return -1;
       return overviewSort === "netDesc" ? bNet - aNet : aNet - bNet;
     });
-  }, [overview, overviewFilter, overviewSort]);
+  }, [overview, overviewFilter, overviewSort, overviewQuarter]);
 
   const overviewStats = useMemo(() => {
     let loaded = 0;
+    let filed = 0;
     let buys = 0;
     let sells = 0;
     let net = 0;
-    let period: string | null = null;
     for (const investor of SUPER_INVESTORS) {
       const entry = overview[investor.id];
       if (entry?.status !== "done" || !entry.filing) continue;
       loaded += 1;
-      if (entry.filing.period && (!period || entry.filing.period > period)) {
-        period = entry.filing.period;
-      }
-      const latest = entry.filing.quarters[0];
-      if (!latest) continue;
-      const quarterNet = latest.buysValue - latest.sellsValue;
+      // 只统计所选季度的真实申报，避免把不同季度混进「本季」口径
+      const current = findQuarterChange(entry.filing.quarters, overviewQuarter);
+      if (!current) continue;
+      filed += 1;
+      const quarterNet = current.buysValue - current.sellsValue;
       net += quarterNet;
       if (quarterNet > 0) buys += 1;
       else if (quarterNet < 0) sells += 1;
     }
-    return { loaded, total: SUPER_INVESTORS.length, buys, sells, net, period };
-  }, [overview]);
+    return {
+      loaded,
+      filed,
+      total: SUPER_INVESTORS.length,
+      buys,
+      sells,
+      net,
+      period: overviewQuarter,
+    };
+  }, [overview, overviewQuarter]);
 
   const topAggregatedChanges = useMemo(() => {
     const entries = SUPER_INVESTORS.flatMap((investor) => {
       const entry = overview[investor.id];
-      if (entry?.status !== "done") return [];
-      const quarter = entry.filing?.quarters[0];
-      return quarter ? [{ investorId: investor.id, quarter }] : [];
+      if (entry?.status !== "done" || !entry.filing) return [];
+      return [{ investorId: investor.id, quarters: entry.filing.quarters }];
     });
+    if (!overviewQuarter) return { buys: [], sells: [] };
     return {
-      buys: aggregateTopChanges(entries, "buy", 5),
-      sells: aggregateTopChanges(entries, "sell", 5),
+      buys: aggregateTopChangesForQuarter(entries, overviewQuarter, "buy", 5),
+      sells: aggregateTopChangesForQuarter(entries, overviewQuarter, "sell", 5),
     };
-  }, [overview]);
+  }, [overview, overviewQuarter]);
 
   const correlationModel = useMemo(() => {
     const seriesMap = new Map<string, Map<string, number>>();
@@ -1096,6 +1181,10 @@ export default function InstitutionsDashboard() {
                 label={t("已加载")}
                 value={`${overviewStats.loaded}/${overviewStats.total}`}
               />
+              <Stat
+                label={t("已披露")}
+                value={`${overviewStats.filed}/${overviewStats.total}`}
+              />
               <Stat label={t("净买入人数")} value={String(overviewStats.buys)} />
               <Stat label={t("净卖出人数")} value={String(overviewStats.sells)} />
               <Stat label={t("合计净额")} value={signedMoney(overviewStats.net)} />
@@ -1111,6 +1200,7 @@ export default function InstitutionsDashboard() {
                 <button
                   type="button"
                   onClick={refreshOverview}
+                  title={t("绕过缓存，重新拉取 SEC 最新申报")}
                   className="inline-flex h-7 items-center rounded-md border border-border px-2 text-[11px] text-muted-foreground transition-colors hover:border-accent/40 hover:bg-hover hover:text-foreground"
                 >
                   {t("刷新全部")}
@@ -1120,6 +1210,37 @@ export default function InstitutionsDashboard() {
                 <p className="w-full text-[9px] text-muted-foreground/70">
                   {t("首次加载受 SEC 限流影响，约需 20-30 秒，之后缓存 6 小时")}
                 </p>
+              )}
+              {overviewStats.loaded > overviewStats.filed && (
+                <p className="w-full text-[9px] text-muted-foreground/70">
+                  {t(
+                    "部分名人尚未提交本期 13F：未披露的卡片会标注最新一期，且不计入上面的净额与人数",
+                  )}
+                </p>
+              )}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-2">
+              <span className="text-[10px] text-muted-foreground">{t("报告季度")}</span>
+              {overviewQuarters.slice(0, 4).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setOverviewQuarter(item)}
+                  aria-pressed={overviewQuarter === item}
+                  className={`inline-flex h-6 items-center rounded-md border px-2 text-[10.5px] transition-colors ${
+                    overviewQuarter === item
+                      ? "border-accent/50 bg-accent-soft font-medium text-accent"
+                      : "border-border text-muted-foreground hover:bg-hover hover:text-foreground"
+                  }`}
+                >
+                  <span className="num">{quarterLabel(item)}</span>
+                  <span className="num ml-1 text-[9px] opacity-70">
+                    {quarterCoverage.get(item) ?? 0}/{SUPER_INVESTORS.length}
+                  </span>
+                </button>
+              ))}
+              {overviewQuarters.length === 0 && (
+                <span className="text-[10px] text-muted-foreground/70">--</span>
               )}
             </div>
           </section>
@@ -1193,6 +1314,7 @@ export default function InstitutionsDashboard() {
                   key={item.id}
                   investor={item}
                   entry={entry}
+                  quarter={overviewQuarter}
                   onOpen={() => {
                     setInvestorId(item.id);
                     setFilter("");
@@ -1263,6 +1385,7 @@ export default function InstitutionsDashboard() {
                 <button
                   type="button"
                   onClick={refreshCorrelation}
+                  title={t("绕过缓存，重新拉取 SEC 最新申报")}
                   className="inline-flex h-7 items-center rounded-md border border-border px-2 text-[11px] text-muted-foreground transition-colors hover:border-accent/40 hover:bg-hover hover:text-foreground"
                 >
                   {t("刷新全部")}
@@ -1576,7 +1699,8 @@ export default function InstitutionsDashboard() {
                   />
                   <button
                     type="button"
-                    onClick={() => void loadFiling(investorId)}
+                    onClick={() => void loadFiling(investorId, true)}
+                    title={t("绕过缓存，重新拉取 SEC 最新申报")}
                     className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-muted-foreground transition-colors hover:border-accent/40 hover:bg-hover hover:text-foreground"
                   >
                     {t("刷新")}

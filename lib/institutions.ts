@@ -500,6 +500,55 @@ export function aggregateTopChanges(
     .map(({ institutions, ...rest }) => ({ ...rest, institutions: institutions.size }));
 }
 
+/** 从一批名人持仓里收集出现过的报告期（新→旧） */
+export function collectReportQuarters(entries: { quarters: QuarterChange[] }[]): string[] {
+  const periods = new Set<string>();
+  for (const entry of entries) {
+    for (const quarter of entry.quarters) {
+      if (quarter.quarter) periods.add(quarter.quarter);
+    }
+  }
+  return [...periods].sort((left, right) => (left < right ? 1 : left > right ? -1 : 0));
+}
+
+/** 取某位名人在指定报告期的调仓；该季度没有 13F 时返回 null */
+export function findQuarterChange(
+  quarters: QuarterChange[] | undefined,
+  period: string | null,
+): QuarterChange | null {
+  if (!period) return null;
+  return quarters?.find((quarter) => quarter.quarter === period) ?? null;
+}
+
+/** 指定报告期已披露 13F 的名人数量 */
+export function countQuarterCoverage(
+  entries: { quarters: QuarterChange[] }[],
+  period: string | null,
+): number {
+  if (!period) return 0;
+  return entries.reduce(
+    (count, entry) => count + (findQuarterChange(entry.quarters, period) ? 1 : 0),
+    0,
+  );
+}
+
+/**
+ * 跨机构加仓 / 减仓 Top N（限定报告期）：
+ * 只聚合在该季度真正提交了 13F 的名人，避免把 Q2 / Q1 的调仓混进最新季度。
+ */
+export function aggregateTopChangesForQuarter(
+  entries: { investorId: string; quarters: QuarterChange[] }[],
+  period: string,
+  side: "buy" | "sell",
+  limit = 5,
+): AggregatedChange[] {
+  const scoped = entries.flatMap(({ investorId, quarters }) => {
+    const quarter = findQuarterChange(quarters, period);
+    return quarter ? [{ investorId, quarter }] : [];
+  });
+  return aggregateTopChanges(scoped, side, limit);
+}
+
 export interface ThirteenFResult {
   investor: SuperInvestor;
   /** SEC 申报主体名（与 preset 的 fund 可能不同，展示以它为准） */
@@ -677,6 +726,16 @@ async function fetchQuarterHoldings(cik: string, accession: string): Promise<Hol
   return holdings;
 }
 
+/** 13F 详情 / 总览摘要共用的缓存 key（显式刷新时按同一 key 失效） */
+export function thirteenFCacheKey(investor: SuperInvestor): string {
+  return `13f:${investor.cik}`;
+}
+
+/** 名人相关性（季度收益序列）缓存 key */
+export function correlationCacheKey(investor: SuperInvestor, quarters: number): string {
+  return `13f-series:${investor.cik}:${quarters}`;
+}
+
 /** 拉取最近 N 份 13F 的季度快照（新→旧），供详情页与相关性分析共用 */
 async function loadSnapshots(
   investor: SuperInvestor,
@@ -719,7 +778,7 @@ async function loadSnapshots(
 export async function get13F(
   investor: SuperInvestor,
 ): Promise<ThirteenFResult & { cached: boolean }> {
-  const result = await cached(`13f:${investor.cik}`, 21600, 86400, async () => {
+  const result = await cached(thirteenFCacheKey(investor), 21600, 86400, async () => {
     const { entityName, snapshots } = await loadSnapshots(investor, 4);
     const latest = snapshots[0];
     const all = latest.holdings;
@@ -874,7 +933,7 @@ export async function get13FReturnSeries(
   quarters = 8,
 ): Promise<ReturnSeries & { cached: boolean }> {
   const result = await cached(
-    `13f-series:${investor.cik}:${quarters}`,
+    correlationCacheKey(investor, quarters),
     21600,
     86400,
     async () => {

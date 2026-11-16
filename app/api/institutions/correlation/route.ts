@@ -1,5 +1,10 @@
 import { NextRequest } from "next/server";
-import { findInvestor, get13FReturnSeries } from "@/lib/institutions";
+import {
+  correlationCacheKey,
+  findInvestor,
+  get13FReturnSeries,
+} from "@/lib/institutions";
+import { dropCache } from "@/lib/cache";
 import { cacheHeaders, errorStatus, jsonError } from "@/lib/http";
 
 export const runtime = "nodejs";
@@ -21,6 +26,8 @@ export async function GET(request: NextRequest) {
   const quarters = Number.isFinite(rawQuarters)
     ? Math.min(12, Math.max(4, Math.round(rawQuarters)))
     : 8;
+  const refresh = request.nextUrl.searchParams.get("refresh") === "1";
+  if (refresh) dropCache(correlationCacheKey(investor, quarters));
 
   try {
     const data = await get13FReturnSeries(investor, quarters);

@@ -3,8 +3,10 @@ import {
   SUPER_INVESTORS,
   findInvestor,
   get13F,
+  thirteenFCacheKey,
   type ThirteenFSummary,
 } from "@/lib/institutions";
+import { dropCache } from "@/lib/cache";
 import { cacheHeaders, errorStatus, jsonError } from "@/lib/http";
 
 export const runtime = "nodejs";
@@ -14,11 +16,13 @@ export const dynamic = "force-dynamic";
  * 超级投资者的最新 13F：
  *  - ?investor=berkshire            完整持仓
  *  - ?investor=berkshire&summary=1  总览用精简摘要（不含持仓明细）
+ *  - &refresh=1                     绕过服务端 6 小时缓存，重新拉取 SEC
  *  - 不带 investor 参数时返回可选列表
  */
 export async function GET(request: NextRequest) {
   const id = request.nextUrl.searchParams.get("investor");
   const summary = request.nextUrl.searchParams.get("summary") === "1";
+  const refresh = request.nextUrl.searchParams.get("refresh") === "1";
 
   if (!id) {
     return Response.json({ investors: SUPER_INVESTORS }, { headers: cacheHeaders(3600, 86400) });
@@ -28,6 +32,8 @@ export async function GET(request: NextRequest) {
   if (!investor) {
     return jsonError("未知的投资者，可选值见 /api/institutions/13f", 400, "invalid_request");
   }
+
+  if (refresh) dropCache(thirteenFCacheKey(investor));
 
   try {
     const data = await get13F(investor);
@@ -39,10 +45,13 @@ export async function GET(request: NextRequest) {
         period: data.period,
         totalPositions: data.totalPositions,
         totalValue: data.totalValue,
-        // 总览只用最新季度明细；旧季度保留汇总数字，避免 29 人的列表把响应撑大
-        quarters: data.quarters.map((quarter, index) =>
-          index === 0 ? quarter : { ...quarter, buys: [], sells: [] },
-        ),
+        // 总览需要按季度切换：每季保留加仓 / 减仓前 10 条（卡片只展示第 1 条，
+        // 跨机构 Top 5 由这些明细聚合），既够用又不把 29 人的响应撑大。
+        quarters: data.quarters.map((quarter) => ({
+          ...quarter,
+          buys: quarter.buys.slice(0, 10),
+          sells: quarter.sells.slice(0, 10),
+        })),
         fetchedAt: data.fetchedAt,
       };
       return Response.json(
