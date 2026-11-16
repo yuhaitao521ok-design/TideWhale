@@ -82,6 +82,12 @@ export async function cached<T>(
   return { value, cached: false, stale: false };
 }
 
+/** 删除单个缓存（用于用户显式刷新，强制下次请求重新拉取上游） */
+export function dropCache(key: string) {
+  store.delete(key);
+  inflight.delete(key);
+}
+
 /** 清空缓存（调试用） */
 export function clearCache() {
   store.clear();

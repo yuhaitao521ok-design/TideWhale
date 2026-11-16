@@ -4,17 +4,22 @@ import assert from "node:assert/strict";
 import {
   aggregateHoldings,
   aggregateTopChanges,
+  aggregateTopChangesForQuarter,
   buildQuarterChanges,
+  collectReportQuarters,
   computePositionChanges,
   computeQuarterlyReturns,
+  countQuarterCoverage,
   detectValueScale,
   estimatePositionTradeValue,
+  findQuarterChange,
   parseInformationTable,
   pearsonCorrelation,
   recent13FFilings,
   type PositionChange,
   type QuarterChange,
 } from "@/lib/institutions";
+import { cached, dropCache } from "@/lib/cache";
 import { HISTORY_SIZE, pushHistory, sanitizeHistory } from "@/lib/backtest-history";
 
 const XML_PLAIN = `<?xml version="1.0" encoding="UTF-8"?>
@@ -535,4 +540,122 @@ test("sanitizeHistory：去重并截断到 HISTORY_SIZE", () => {
   ]);
   assert.equal(sanitizeHistory(raw).length, HISTORY_SIZE);
   assert.deepEqual(sanitizeHistory("not-an-array"), []);
+});
+
+/* ---------------------------------------------------------------- */
+/*                    13F 最新报告期 / 季度切换                       */
+/* ---------------------------------------------------------------- */
+
+const qc = (
+  period: string,
+  buysValue: number,
+  sellsValue: number,
+  buys: PositionChange[] = [],
+  sells: PositionChange[] = [],
+): QuarterChange => ({
+  quarter: period,
+  filedAt: null,
+  previousQuarter: null,
+  positions: 10,
+  totalValue: 10000,
+  buys,
+  sells,
+  buysCount: buys.length,
+  sellsCount: sells.length,
+  buysValue,
+  sellsValue,
+});
+
+const position = (issuer: string, value: number, action: "new" | "exit"): PositionChange => ({
+  cusip: issuer,
+  issuer,
+  titleOfClass: "COM",
+  putCall: null,
+  shares: action === "new" ? 100 : null,
+  prevShares: action === "exit" ? 100 : null,
+  shareChange: action === "new" ? 100 : -100,
+  changePercent: action === "new" ? null : -100,
+  value: action === "new" ? value : null,
+  prevValue: action === "exit" ? value : null,
+  valueChange: action === "new" ? value : -value,
+  action,
+});
+
+test("collectReportQuarters：合并所有名人的报告期并按新→旧排序", () => {
+  const entries = [
+    { quarters: [qc("2026-09-30", 1, 0), qc("2026-06-30", 1, 0)] },
+    { quarters: [qc("2026-06-30", 1, 0), qc("2025-12-31", 1, 0)] },
+  ];
+  assert.deepEqual(collectReportQuarters(entries), [
+    "2026-09-30",
+    "2026-06-30",
+    "2025-12-31",
+  ]);
+  assert.deepEqual(collectReportQuarters([]), []);
+});
+
+test("findQuarterChange / countQuarterCoverage：只认真正披露该季的名人", () => {
+  const filings = [
+    { quarters: [qc("2026-09-30", 100, 40), qc("2026-06-30", 50, 20)] },
+    { quarters: [qc("2026-06-30", 30, 10)] },
+    { quarters: [] },
+  ];
+
+  assert.equal(findQuarterChange(filings[0].quarters, "2026-09-30")?.buysValue, 100);
+  assert.equal(findQuarterChange(filings[1].quarters, "2026-09-30"), null);
+  assert.equal(findQuarterChange(filings[0].quarters, null), null);
+
+  assert.equal(countQuarterCoverage(filings, "2026-09-30"), 1);
+  assert.equal(countQuarterCoverage(filings, "2026-06-30"), 2);
+  assert.equal(countQuarterCoverage(filings, "2025-12-31"), 0);
+});
+
+test("aggregateTopChangesForQuarter：不把其它季度的调仓混进所选季度", () => {
+  const appleQ3 = position("APPLE INC", 5000, "new");
+  const appleQ2 = position("APPLE INC", 9000, "new");
+  const nvidiaQ3 = position("NVIDIA CORP", 2000, "new");
+
+  const entries = [
+    { investorId: "a", quarters: [qc("2026-09-30", 5000, 0, [appleQ3]), qc("2026-06-30", 9000, 0, [appleQ2])] },
+    { investorId: "b", quarters: [qc("2026-09-30", 2000, 0, [nvidiaQ3])] },
+    // 只披露到 Q2 的名人不应出现在 Q3 榜单
+    { investorId: "c", quarters: [qc("2026-06-30", 9000, 0, [appleQ2])] },
+  ];
+
+  const q3 = aggregateTopChangesForQuarter(entries, "2026-09-30", "buy", 5);
+  assert.equal(q3.length, 2);
+  assert.equal(q3[0].issuer, "APPLE INC");
+  assert.equal(q3[0].amount, 5000);
+  assert.equal(q3[0].institutions, 1);
+  assert.equal(q3[1].issuer, "NVIDIA CORP");
+
+  const q2 = aggregateTopChangesForQuarter(entries, "2026-06-30", "buy", 5);
+  assert.equal(q2[0].issuer, "APPLE INC");
+  // a 与 c 在 Q2 都持有苹果，合计 18000
+  assert.equal(q2[0].amount, 18000);
+  assert.equal(q2[0].institutions, 2);
+
+  assert.deepEqual(aggregateTopChangesForQuarter(entries, "2025-12-31", "buy", 5), []);
+});
+
+test("dropCache：显式刷新后重新执行 loader", async () => {
+  const key = "test:institutions:drop-cache";
+  let calls = 0;
+  const loader = async () => {
+    calls += 1;
+    return calls;
+  };
+
+  const first = await cached(key, 60, 60, loader);
+  assert.equal(first.value, 1);
+  const hit = await cached(key, 60, 60, loader);
+  assert.equal(hit.cached, true);
+  assert.equal(calls, 1);
+
+  dropCache(key);
+  const refreshed = await cached(key, 60, 60, loader);
+  assert.equal(refreshed.value, 2);
+  assert.equal(calls, 2);
+
+  dropCache(key);
 });
