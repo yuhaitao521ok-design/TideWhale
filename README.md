@@ -19,7 +19,7 @@
 - **图表缩放**：鼠标滚轮以指针为中心放大 / 缩小 K 线（最少 12 根），Shift + 滚轮平移，双击或点右上角「已放大」按钮复位；缩放后指标、提醒线、盘前盘后阴影都跟着重算
 - **技术指标**：一键添加 MA / EMA / MACD / RSI / BOLL，支持自定义参数；MA、EMA、BOLL 叠加主图，MACD、RSI 为副图，指标配置持久化
 - **价格提醒**：为任意标的设定「涨到 / 跌破」目标价，价格穿越时弹出页面提示 +（可选）浏览器通知，提醒线与状态持久化到 localStorage
-- **市场全景（右栏）**：板块热力图（11 个 SPDR 行业 ETF，按涨跌幅上色）+ 跨资产（VIX / 美债 10 年 / 美元指数 / 黄金 / 原油 / BTC），点击板块可直接看走势
+- **市场全景（右栏）**：板块热力图（11 个 SPDR 行业 ETF，按涨跌幅上色）+ 跨资产（VIX / 美债 10 年 / 美元指数 / 黄金 / 原油 / BTC）+ **恐惧贪婪指数**（CNN Business：0–100 分数、五档刻度与指针、近 30 日走势、昨收 / 一周 / 一月 / 一年前对比），点击板块可直接看走势
 - **技术面摘要**：图表下方自动给出结论（偏多 / 中性 / 偏空）+ 均线排列、RSI、BOLL 位置、量比、ATR、52 周位置、连涨连跌（固定参数、无需手动加指标）
 - **全球指数概览**：美股（标普 500 / 纳指 100 / 道指 30 / 罗素 2000）+ 亚太（恒生 / 上证 / 沪深 300 / 日经 225 / KOSPI / STI）共 10 个指标，宽卡片 + 迷你走势 + 涨跌幅条，点击即可查看走势；独立 `/api/indices` 接口，单指标失败不影响其它
 - **基本面数据**：市值、市盈率 / 预期市盈率、EPS、股息率、Beta、平均成交量、1 年目标价，以及带现价游标的 52 周区间条
@@ -136,6 +136,7 @@ Yahoo 可能限流或临时不可用，项目会自动降级到 Nasdaq（见「�
 | `GET /api/quotes?symbols=AAPL,MSFT` | 批量报价 + 迷你走势（一次最多 60 个代码，服务端缓存 15s）；每条报价带 `session`（pre/regular/post/overnight/closed）与 `extended`（盘前盘后成交） |
 | `GET /api/chart?symbol=AAPL&range=1M&interval=1d` | 指定周期 + 间隔的走势与报价；`range` 取 `1D/5D/1M/3M/6M/1Y/5Y/MAX`，`interval` 见下文「K 线间隔」 |
 | `GET /api/markets` | 右栏市场全景：板块 11 个 + 跨资产 6 个（Yahoo → Nasdaq 板块 / Sina 黄金原油 兜底，缓存 30s） |
+| `GET /api/fear-greed` | CNN Business 恐惧贪婪指数：当前分数 / 档位、昨收与周 / 月 / 年对比、近 30 日走势（缓存 60s，失败只影响本卡片） |
 | `GET /api/indices` | 全球指数概览（美股 4 + 亚太 6），Yahoo → Nasdaq（美股）/ Sina（亚太与美股备用）多级兜底，缓存 30s |
 | `GET /api/search?q=英伟达` | 代码 / 公司名搜索（Yahoo 不可用时回退到内置热门列表） |
 | `GET /api/fundamentals?symbol=AAPL` | 基本面指标（Yahoo `quoteSummary`，失败时退到 Nasdaq summary + dividends；缓存 10 分钟） |
@@ -314,8 +315,9 @@ curl 'http://localhost:3000/api/chart?symbol=NVDA&range=1Y&interval=1wk' | jq '.
 | --- | --- | --- |
 | **跨资产** | VIX、美债 10 年（按百分比显示）、美元指数、黄金、原油 WTI、比特币，带迷你走势；**点击任意一行即切换为该标的走势**，选中行高亮 | Yahoo spark（一次批量）；Yahoo 不可用时黄金 / 原油退到 Sina，其余留 `--`。走势同样只有 Yahoo 提供，失败时图表下方会说明原因 |
 | **板块热力** | 11 个 SPDR 行业 ETF（XLK/XLC/XLY/XLP/XLF/XLV/XLI/XLE/XLB/XLU/XLRE），底色按涨跌幅深浅着色，点击切换为该标的 | Yahoo spark；不可用时退到 Nasdaq |
+| **恐惧贪婪指数** | CNN Business 的 0–100 情绪分数 + 五档档位（极度恐惧 / 恐惧 / 中性 / 贪婪 / 极度贪婪）、五段刻度条与指针、近 30 日走势、昨收 / 一周 / 一月 / 一年前对比 | CNN 公开 dataviz 接口（无需 Key），独立 `/api/fear-greed`，缓存 60s；失败只影响本卡片 |
 
-- 两者合并成一个 `/api/markets` 请求（17 个代码，30 秒刷新），失败时右栏显示「点击重试」，不影响主行情
+- 板块 / 跨资产合并成一个 `/api/markets` 请求（17 个代码，30 秒刷新），失败时右栏显示「点击重试」，不影响主行情；恐惧贪婪指数单独请求（60 秒刷新），任何一边失败都不会拖垮另一边
 - 配色用 `color-mix(in srgb, var(--positive|--negative) N%, transparent)`，深浅随涨跌幅线性变化（±3% 封顶）
 
 ## 技术面摘要
@@ -494,6 +496,7 @@ app/
     fundamentals/route.ts 基本面（市值 / 估值 / 分红）
     insight/route.ts    AI 解读（provider 可切换）
     config/route.ts     功能开关探测
+    fear-greed/route.ts CNN 恐惧贪婪指数
 components/
   Dashboard.tsx         主面板（状态、轮询、自选股、导航）
   PriceChart.tsx        SVG 走势图（折线 / K 线）
@@ -507,6 +510,7 @@ components/
   GroupPicker.tsx       自选股分组选择器（行内弹层）
   SectorHeatmap.tsx     板块热力图
   CrossAssetPanel.tsx   跨资产面板
+  FearGreedCard.tsx     恐惧贪婪指数（CNN Business）
   TechnicalSummaryCard.tsx 技术面摘要卡片
   GroupSummary.tsx      分组表现（左栏底部）
   PriceAlerts.tsx       价格提醒弹层
@@ -520,6 +524,7 @@ lib/
   watchlist.ts          自选股排序 / 拖拽移动 / 落点计算
   index-groups.ts       全球指数定义（代码 / 中文名 / 货币）
   markets.ts            板块热力 + 跨资产（右栏）数据编排
+  fear-greed.ts         CNN 恐惧贪婪指数解析 / 分档 / 拉取
   technical.ts          技术面摘要计算（均线 / RSI / BOLL / 量比 / ATR / 连涨）
   indices.ts            指数编排（Yahoo → Nasdaq / Sina 兜底）
   sina.ts               新浪财经指数与美股 ETF 兜底适配器

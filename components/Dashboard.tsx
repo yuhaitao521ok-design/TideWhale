@@ -21,6 +21,7 @@ import SessionBadge from "@/components/SessionBadge";
 import GroupPicker from "@/components/GroupPicker";
 import CrossAssetPanel from "@/components/CrossAssetPanel";
 import SectorHeatmap from "@/components/SectorHeatmap";
+import FearGreedCard from "@/components/FearGreedCard";
 import TechnicalSummaryCard from "@/components/TechnicalSummaryCard";
 import GroupSummary from "@/components/GroupSummary";
 import { chartToCsv } from "@/lib/csv";
@@ -2464,6 +2465,7 @@ export default function Dashboard() {
               selected={selected}
               onSelect={selectFromPanel}
             />
+            <FearGreedCard />
             {marketsError && (
               <button
                 type="button"
