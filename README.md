@@ -315,9 +315,9 @@ curl 'http://localhost:3000/api/chart?symbol=NVDA&range=1Y&interval=1wk' | jq '.
 | --- | --- | --- |
 | **跨资产** | VIX、美债 10 年（按百分比显示）、美元指数、黄金、原油 WTI、比特币，带迷你走势；**点击任意一行即切换为该标的走势**，选中行高亮 | Yahoo spark（一次批量）；Yahoo 不可用时黄金 / 原油退到 Sina，其余留 `--`。走势同样只有 Yahoo 提供，失败时图表下方会说明原因 |
 | **板块热力** | 11 个 SPDR 行业 ETF（XLK/XLC/XLY/XLP/XLF/XLV/XLI/XLE/XLB/XLU/XLRE），底色按涨跌幅深浅着色，点击切换为该标的 | Yahoo spark；不可用时退到 Nasdaq |
-| **恐惧贪婪指数** | CNN Business 的 0–100 情绪分数 + 五档档位（极度恐惧 / 恐惧 / 中性 / 贪婪 / 极度贪婪）、五段刻度条与指针、近 30 日走势、昨收 / 一周 / 一月 / 一年前对比 | CNN 公开 dataviz 接口（无需 Key），独立 `/api/fear-greed`，缓存 60s；失败只影响本卡片 |
+| **恐惧贪婪指数** | CNN Business 的 0–100 情绪分数 + 五档档位（极度恐惧 / 恐惧 / 中性 / 贪婪 / 极度贪婪）、五段刻度条与指针、近 30 日走势、昨收 / 一周 / 一月 / 一年前对比 | CNN 公开 dataviz 接口（无需 Key），独立 `/api/fear-greed`（缓存 60s，旧值最多留 1 小时），前端 5 分钟轮询并跟随「自动刷新」开关；失败只影响本卡片 |
 
-- 板块 / 跨资产合并成一个 `/api/markets` 请求（17 个代码，30 秒刷新），失败时右栏显示「点击重试」，不影响主行情；恐惧贪婪指数单独请求（60 秒刷新），任何一边失败都不会拖垮另一边
+- 板块 / 跨资产合并成一个 `/api/markets` 请求（17 个代码，30 秒刷新），失败时右栏显示「点击重试」，不影响主行情；恐惧贪婪指数单独请求（5 分钟轮询，共用行情页的「自动刷新」开关），任何一边失败都不会拖垮另一边
 - 配色用 `color-mix(in srgb, var(--positive|--negative) N%, transparent)`，深浅随涨跌幅线性变化（±3% 封顶）
 
 ## 技术面摘要
@@ -524,7 +524,8 @@ lib/
   watchlist.ts          自选股排序 / 拖拽移动 / 落点计算
   index-groups.ts       全球指数定义（代码 / 中文名 / 货币）
   markets.ts            板块热力 + 跨资产（右栏）数据编排
-  fear-greed.ts         CNN 恐惧贪婪指数解析 / 分档 / 拉取
+  fear-greed.ts         CNN 恐惧贪婪指数解析 / 分档（纯函数，客户端安全）
+  cnn.ts                CNN 恐惧贪婪指数适配器（取数 + 缓存）
   technical.ts          技术面摘要计算（均线 / RSI / BOLL / 量比 / ATR / 连涨）
   indices.ts            指数编排（Yahoo → Nasdaq / Sina 兜底）
   sina.ts               新浪财经指数与美股 ETF 兜底适配器

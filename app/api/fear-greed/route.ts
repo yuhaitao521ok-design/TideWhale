@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getFearGreed } from "@/lib/fear-greed";
+import { getFearGreed } from "@/lib/cnn";
 import { cacheHeaders, errorStatus, jsonError } from "@/lib/http";
 
 export const runtime = "nodejs";
@@ -9,7 +9,9 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   try {
     const data = await getFearGreed();
-    return NextResponse.json(data, { headers: cacheHeaders(60, 300) });
+    return NextResponse.json(data, {
+      headers: { ...cacheHeaders(60, 300), "X-Data-Source": data.provider },
+    });
   } catch (error) {
     const { status, message, code } = errorStatus(error);
     return jsonError(message, status, code);
