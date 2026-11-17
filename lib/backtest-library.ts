@@ -4,12 +4,14 @@
  * 与 lib/watchlist.ts 的分组语义保持一致（分组 id / 名称 / 归属映射），
  * 但完全独立存储，互不影响：
  *   - 最近回测列表自动收集搜索过的代码（最多 MAX_BACKTEST_SYMBOLS 只）
- *   - 分组可自由命名，一个标的只属于一个分组
- *   - 删除分组时标的回到「未分组」，不会从标的库里消失
+ *   - 分组可自由命名、可拖动排序，同一个标的可以同时属于多个分组
+ *   - 删除分组时只移除该归属，不会从标的库里消失
  */
 
-export const LIBRARY_KEY = "data-insider:backtest-library:v1";
-/** 旧版只有「最近回测」列表的存储键，首次打开时迁移过来 */
+export const LIBRARY_KEY = "data-insider:backtest-library:v2";
+/** v1 的归属是「代码 → 单个分组」，读取时自动升级为数组 */
+export const LEGACY_LIBRARY_KEY = "data-insider:backtest-library:v1";
+/** 更早的版本只有「最近回测」列表（string[]），首次打开时迁移过来 */
 export const LEGACY_HISTORY_KEY = "data-insider:backtest-history:v1";
 
 export const MAX_BACKTEST_SYMBOLS = 40;
@@ -33,8 +35,8 @@ export interface BacktestLibrary {
   /** 最近回测过的代码，最新的在最前 */
   symbols: string[];
   groups: BacktestGroup[];
-  /** 代码 → 分组 id；没有记录即「未分组」 */
-  assignment: Record<string, string>;
+  /** 代码 → 分组 id 列表（可属于多个分组；没有记录即「未分组」） */
+  assignment: Record<string, string[]>;
 }
 
 export function emptyLibrary(): BacktestLibrary {
@@ -86,16 +88,22 @@ export function sanitizeLibrary(raw: unknown): BacktestLibrary {
     }
   }
 
-  const assignment: Record<string, string> = {};
+  const assignment: Record<string, string[]> = {};
   if (
     source.assignment &&
     typeof source.assignment === "object" &&
     !Array.isArray(source.assignment)
   ) {
-    for (const [symbol, groupId] of Object.entries(source.assignment as Record<string, unknown>)) {
-      if (typeof groupId !== "string" || !ids.has(groupId)) continue;
+    for (const [symbol, value] of Object.entries(source.assignment as Record<string, unknown>)) {
       if (!symbols.includes(symbol)) continue;
-      assignment[symbol] = groupId;
+      // v1 是单个字符串，v2 是数组；两种都接受，顺带去重并清掉失效分组
+      const candidates = Array.isArray(value) ? value : [value];
+      const groupIds: string[] = [];
+      for (const candidate of candidates) {
+        if (typeof candidate !== "string" || !ids.has(candidate)) continue;
+        if (!groupIds.includes(candidate)) groupIds.push(candidate);
+      }
+      if (groupIds.length > 0) assignment[symbol] = groupIds;
     }
   }
 
@@ -120,9 +128,9 @@ export function addSymbol(library: BacktestLibrary, symbol: string): BacktestLib
     return library;
   }
 
-  const assignment: Record<string, string> = {};
-  for (const [key, groupId] of Object.entries(library.assignment)) {
-    if (symbols.includes(key)) assignment[key] = groupId;
+  const assignment: Record<string, string[]> = {};
+  for (const [key, groupIds] of Object.entries(library.assignment)) {
+    if (symbols.includes(key)) assignment[key] = groupIds;
   }
   return { ...library, symbols, assignment };
 }
@@ -175,31 +183,61 @@ export function renameGroup(
   };
 }
 
-/** 删除分组：组内标的回到「未分组」，不会从标的库消失 */
+/** 删除分组：从所有标的的归属里移除该 id，不会从标的库消失 */
 export function deleteGroup(library: BacktestLibrary, id: string): BacktestLibrary {
   if (!library.groups.some((group) => group.id === id)) return library;
-  const assignment: Record<string, string> = {};
-  for (const [symbol, groupId] of Object.entries(library.assignment)) {
-    if (groupId !== id) assignment[symbol] = groupId;
+  const assignment: Record<string, string[]> = {};
+  for (const [symbol, groupIds] of Object.entries(library.assignment)) {
+    const next = groupIds.filter((groupId) => groupId !== id);
+    if (next.length > 0) assignment[symbol] = next;
   }
   return { ...library, groups: library.groups.filter((group) => group.id !== id), assignment };
 }
 
-/** 把标的归入分组（groupId 为 null 表示移出分组）；标的 / 分组不存在时原样返回 */
-export function assignSymbol(
+/** 切换某个标的在某个分组里的归属（可同时属于多个分组） */
+export function toggleSymbolGroup(
   library: BacktestLibrary,
   symbol: string,
-  groupId: string | null,
+  groupId: string,
 ): BacktestLibrary {
   if (!library.symbols.includes(symbol)) return library;
-  const assignment = { ...library.assignment };
-  if (groupId === null) {
-    delete assignment[symbol];
-    return { ...library, assignment };
-  }
   if (!library.groups.some((group) => group.id === groupId)) return library;
-  assignment[symbol] = groupId;
+
+  const current = library.assignment[symbol] ?? [];
+  const next = current.includes(groupId)
+    ? current.filter((item) => item !== groupId)
+    : [...current, groupId];
+
+  const assignment = { ...library.assignment };
+  if (next.length > 0) assignment[symbol] = next;
+  else delete assignment[symbol];
   return { ...library, assignment };
+}
+
+/** 把标的移出全部分组（回到「未分组」） */
+export function clearSymbolGroups(library: BacktestLibrary, symbol: string): BacktestLibrary {
+  if (!library.assignment[symbol]) return library;
+  const assignment = { ...library.assignment };
+  delete assignment[symbol];
+  return { ...library, assignment };
+}
+
+/** 某个标的分属的分组（按分组当前顺序返回，供 UI 展示） */
+export function groupsOfSymbol(library: BacktestLibrary, symbol: string): BacktestGroup[] {
+  const groupIds = library.assignment[symbol] ?? [];
+  return library.groups.filter((group) => groupIds.includes(group.id));
+}
+
+/** 调整分组顺序（拖动标签）：越界或原地不动时原样返回 */
+export function moveGroup(library: BacktestLibrary, from: number, to: number): BacktestLibrary {
+  if (from === to) return library;
+  if (from < 0 || from >= library.groups.length) return library;
+  if (to < 0 || to >= library.groups.length) return library;
+
+  const groups = [...library.groups];
+  const [moved] = groups.splice(from, 1);
+  groups.splice(to, 0, moved);
+  return { ...library, groups };
 }
 
 export interface LibrarySection {
@@ -218,9 +256,14 @@ export function groupSections(library: BacktestLibrary): LibrarySection[] {
   const ungrouped: string[] = [];
 
   for (const symbol of library.symbols) {
-    const groupId = library.assignment[symbol];
-    if (groupId && buckets.has(groupId)) buckets.get(groupId)!.push(symbol);
-    else ungrouped.push(symbol);
+    const groupIds = library.assignment[symbol] ?? [];
+    let placed = false;
+    for (const groupId of groupIds) {
+      if (!buckets.has(groupId)) continue;
+      buckets.get(groupId)!.push(symbol);
+      placed = true;
+    }
+    if (!placed) ungrouped.push(symbol);
   }
 
   const sections: LibrarySection[] = library.groups.map((group) => ({
@@ -240,5 +283,7 @@ export function symbolsOf(library: BacktestLibrary, groupId: string): string[] {
   if (groupId === UNGROUPED_SYMBOLS_ID) {
     return library.symbols.filter((symbol) => !library.assignment[symbol]);
   }
-  return library.symbols.filter((symbol) => library.assignment[symbol] === groupId);
+  return library.symbols.filter((symbol) =>
+    (library.assignment[symbol] ?? []).includes(groupId),
+  );
 }
