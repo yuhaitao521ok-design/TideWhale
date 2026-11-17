@@ -4,7 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import PageShell from "@/components/PageShell";
 import DrawdownChart from "@/components/backtest/DrawdownChart";
 import EquityChart from "@/components/backtest/EquityChart";
+import BatchResults from "@/components/backtest/BatchResults";
 import StrategyPicker from "@/components/backtest/StrategyPicker";
+import SymbolLibrary from "@/components/backtest/SymbolLibrary";
 import SymbolPicker from "@/components/backtest/SymbolPicker";
 import { useI18n } from "@/lib/i18n";
 import { formatNumber, formatPercent, formatPrice } from "@/lib/format";
@@ -31,7 +33,29 @@ import {
   estimateBars,
   intervalsForBacktest,
 } from "@/lib/backtest-frame";
-import { HISTORY_KEY, pushHistory, sanitizeHistory } from "@/lib/backtest-history";
+import {
+  ALL_SYMBOLS_ID,
+  LEGACY_HISTORY_KEY,
+  LIBRARY_KEY,
+  MAX_BACKTEST_GROUPS,
+  addSymbol,
+  assignSymbol,
+  createGroup,
+  deleteGroup,
+  emptyLibrary,
+  libraryFromHistory,
+  removeSymbol,
+  renameGroup,
+  sanitizeLibrary,
+  symbolsOf,
+  type BacktestLibrary,
+} from "@/lib/backtest-library";
+import {
+  buildBatchError,
+  buildBatchRow,
+  mapWithConcurrency,
+  type BatchBacktestRow,
+} from "@/lib/backtest-batch";
 import {
   DEFAULT_WATCHLIST,
   INTERVAL_CONFIG,
@@ -49,7 +73,23 @@ export default function BacktestDashboard() {
   const { t } = useI18n();
   const [symbol, setSymbol] = useState<string>(DEFAULT_WATCHLIST[0]);
   const [draft, setDraft] = useState<string>(DEFAULT_WATCHLIST[0]);
-  const [history, setHistory] = useState<string[]>([DEFAULT_WATCHLIST[0]]);
+  const [library, setLibrary] = useState<BacktestLibrary>(() => ({
+    ...emptyLibrary(),
+    symbols: [DEFAULT_WATCHLIST[0]],
+  }));
+  const [libraryReady, setLibraryReady] = useState(false);
+  const [activeGroupId, setActiveGroupId] = useState<string>(ALL_SYMBOLS_ID);
+  const [batch, setBatch] = useState<{
+    groupName: string;
+    range: RangeKey;
+    interval: IntervalKey;
+    rows: BatchBacktestRow[];
+    running: boolean;
+    done: number;
+    total: number;
+  } | null>(null);
+  const batchRef = useRef(0);
+  const batchAbortRef = useRef<AbortController | null>(null);
   const [range, setRange] = useState<RangeKey>("5Y");
   const [interval, setIntervalKey] = useState<IntervalKey>(defaultBacktestInterval("5Y"));
   const [params, setParams] = useState<BacktestParams>(DEFAULT_PARAMS);
@@ -63,26 +103,38 @@ export default function BacktestDashboard() {
   const [copied, setCopied] = useState(false);
   const urlSyncedRef = useRef(false);
 
-  // 读取历史列表
+  // 读取标的库（没有新键时把旧版「最近回测」迁移过来）
   useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(HISTORY_KEY);
+      const raw = window.localStorage.getItem(LIBRARY_KEY);
       if (raw) {
-        const list = sanitizeHistory(JSON.parse(raw));
-        if (list.length > 0) setHistory(list);
+        const stored = sanitizeLibrary(JSON.parse(raw));
+        if (stored.symbols.length > 0) {
+          setLibrary(stored);
+          return;
+        }
+      }
+      const legacy = window.localStorage.getItem(LEGACY_HISTORY_KEY);
+      if (legacy) {
+        const migrated = libraryFromHistory(JSON.parse(legacy));
+        if (migrated.symbols.length > 0) setLibrary(migrated);
       }
     } catch {
       // 忽略
+    } finally {
+      // 读完（或确认没有存档）后再允许写回，避免首帧把存档覆盖成默认值
+      setLibraryReady(true);
     }
   }, []);
 
   useEffect(() => {
+    if (!libraryReady) return;
     try {
-      window.localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+      window.localStorage.setItem(LIBRARY_KEY, JSON.stringify(library));
     } catch {
       // 忽略
     }
-  }, [history]);
+  }, [library, libraryReady]);
 
   // 只有合法代码才请求（避免删除输入时 404 报错）
   const load = useCallback(
@@ -149,6 +201,7 @@ export default function BacktestDashboard() {
     if (SYMBOL_RE.test(urlSymbol)) {
       setSymbol(urlSymbol);
       setDraft(urlSymbol);
+      setLibrary((prev) => addSymbol(prev, urlSymbol));
     }
 
     const validRange = BACKTEST_RANGES.find((item) => item === query.get("range"));
@@ -280,8 +333,91 @@ export default function BacktestDashboard() {
 
   function commitSymbol(next: string) {
     if (!SYMBOL_RE.test(next)) return;
+    // 新代码不在当前分组里时切回「所有标的」，否则用户会觉得刚搜的代码没进列表
+    if (!symbolsOf(library, activeGroupId).includes(next)) setActiveGroupId(ALL_SYMBOLS_ID);
     setSymbol(next);
-    setHistory((prev) => pushHistory(prev, next));
+    setLibrary((prev) => addSymbol(prev, next));
+  }
+
+  /* ------------------------------- 标的库分组 ------------------------------ */
+
+  function createLibraryGroup(name: string): string | null {
+    const result = createGroup(library, name);
+    if (!result) {
+      return library.groups.length >= MAX_BACKTEST_GROUPS
+        ? `${t("最多")} ${MAX_BACKTEST_GROUPS} ${t("个分组")}`
+        : t("分组名称为空或已存在");
+    }
+    setLibrary(result.library);
+    setActiveGroupId(result.group.id);
+    return null;
+  }
+
+  function renameLibraryGroup(groupId: string, name: string): string | null {
+    const next = renameGroup(library, groupId, name);
+    if (!next) return t("分组名称为空或已存在");
+    setLibrary(next);
+    return null;
+  }
+
+  function deleteLibraryGroup(groupId: string) {
+    setLibrary((prev) => deleteGroup(prev, groupId));
+    setActiveGroupId((prev) => (prev === groupId ? ALL_SYMBOLS_ID : prev));
+  }
+
+  function removeLibrarySymbol(target: string) {
+    setLibrary((prev) => removeSymbol(prev, target));
+  }
+
+  function clearLibrary() {
+    setLibrary((prev) => ({ ...prev, symbols: [], assignment: {} }));
+    setActiveGroupId(ALL_SYMBOLS_ID);
+    batchRef.current += 1;
+    batchAbortRef.current?.abort();
+    setBatch(null);
+  }
+
+  /* ------------------------------- 组合回测 ------------------------------- */
+
+  async function runBatch(groupId: string) {
+    const members = symbolsOf(library, groupId);
+    const groupName = library.groups.find((group) => group.id === groupId)?.name ?? groupId;
+    if (members.length === 0) return;
+
+    batchAbortRef.current?.abort();
+    const controller = new AbortController();
+    batchAbortRef.current = controller;
+    const ticket = ++batchRef.current;
+    const total = members.length;
+    let done = 0;
+    setBatch({ groupName, range, interval, rows: [], running: true, done: 0, total });
+
+    const rows = await mapWithConcurrency(members, 3, async (member) => {
+      let row: BatchBacktestRow;
+      if (controller.signal.aborted) return buildBatchError(member, t("已取消"));
+      try {
+        const response = await fetch(
+          `/api/chart?symbol=${encodeURIComponent(member)}&range=${range}&interval=${interval}`,
+          { cache: "no-store", signal: controller.signal },
+        );
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = (await response.json()) as { points?: ChartPoint[] };
+        const series = data.points ?? [];
+        if (series.length === 0) throw new Error(t("数据点不足，无法回测"));
+        row = buildBatchRow(member, runBacktest(series, params, interval));
+      } catch (err) {
+        row = buildBatchError(member, err instanceof Error ? err.message : t("加载失败"));
+      }
+
+      done += 1;
+      if (batchRef.current === ticket) {
+        setBatch((prev) => (prev ? { ...prev, done, rows: [...prev.rows, row] } : prev));
+      }
+      return row;
+    });
+
+    if (batchRef.current !== ticket || controller.signal.aborted) return;
+    setBatch({ groupName, range, interval, rows, running: false, done: total, total });
   }
 
   /** 切换区间时，若当前 K 线周期在该区间不可用，自动落到默认周期 */
@@ -408,8 +544,6 @@ export default function BacktestDashboard() {
               value={symbol}
               onChange={commitSymbol}
               onDraft={setDraft}
-              history={history}
-              onClearHistory={() => setHistory([])}
               invalid={draft.length > 0 && !SYMBOL_RE.test(draft)}
             />
 
@@ -462,6 +596,24 @@ export default function BacktestDashboard() {
               </div>
             </div>
           </section>
+
+          <SymbolLibrary
+            library={library}
+            activeGroupId={activeGroupId}
+            onActiveGroupChange={setActiveGroupId}
+            currentSymbol={symbol}
+            onSelect={commitSymbol}
+            onRemove={removeLibrarySymbol}
+            onCreateGroup={createLibraryGroup}
+            onRenameGroup={renameLibraryGroup}
+            onDeleteGroup={deleteLibraryGroup}
+            onAssign={(target, groupId) =>
+              setLibrary((prev) => assignSymbol(prev, target, groupId))
+            }
+            onClear={clearLibrary}
+            onBatchBacktest={(groupId) => void runBatch(groupId)}
+            batch={batch}
+          />
 
           <section className="rounded-xl border border-border bg-card p-3">
             <p className="mb-2 text-[11px] font-medium text-muted-foreground">
@@ -526,6 +678,24 @@ export default function BacktestDashboard() {
         </aside>
 
         <section className="min-w-0 space-y-3" aria-busy={loading}>
+          {batch && (
+            <BatchResults
+              groupName={batch.groupName}
+              rows={batch.rows}
+              running={batch.running}
+              done={batch.done}
+              total={batch.total}
+              rangeLabel={t(RANGE_CONFIG[batch.range].label)}
+              intervalLabel={t(INTERVAL_CONFIG[batch.interval].label)}
+              onSelect={commitSymbol}
+              onClose={() => {
+                batchRef.current += 1;
+                batchAbortRef.current?.abort();
+                setBatch(null);
+              }}
+            />
+          )}
+
           {error ? (
             <div className="rounded-xl border border-border bg-card p-5">
               <p className="text-[12px] text-negative-text">{error}</p>

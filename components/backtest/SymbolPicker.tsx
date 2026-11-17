@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { HISTORY_SIZE } from "@/lib/backtest-history";
 import type { SearchResult } from "@/lib/types";
 
 interface SymbolPickerProps {
@@ -10,23 +9,19 @@ interface SymbolPickerProps {
   onChange: (symbol: string) => void;
   /** 输入过程中的草稿（可能非法），由父组件决定是否请求 */
   onDraft: (draft: string) => void;
-  history: string[];
-  onClearHistory: () => void;
   invalid: boolean;
 }
 
 const SYMBOL_RE = /^[A-Z0-9.^=-]{1,12}$/;
 
 /**
- * 代码输入 + 搜索建议 + 最近回测。
- * 搜索下拉只在「输入框里打字」时出现：点最近回测的标签直接切换，不会再弹出建议列表。
+ * 代码输入 + 搜索建议。
+ * 搜索下拉只在「输入框里打字」时出现；选定后由父组件写入标的库并切换回测对象。
  */
 export default function SymbolPicker({
   value,
   onChange,
   onDraft,
-  history,
-  onClearHistory,
   invalid,
 }: SymbolPickerProps) {
   const { t } = useI18n();
@@ -41,7 +36,7 @@ export default function SymbolPicker({
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // 外部切换标的（最近回测 / 父组件）时同步输入框，并清掉搜索态
+  // 外部切换标的（标的库 / 父组件）时同步输入框，并清掉搜索态
   useEffect(() => {
     setDraft(value);
     setQuery("");
@@ -249,47 +244,6 @@ export default function SymbolPicker({
         </div>
       )}
 
-      <div className="mt-2.5">
-        <div className="mb-1 flex items-center justify-between">
-          <span className="text-[10px] text-muted-foreground">{t("最近回测")}</span>
-          {history.length > 0 && (
-            <button
-              type="button"
-              onClick={onClearHistory}
-              className="rounded px-1 text-[10px] text-muted-foreground transition-colors hover:bg-hover hover:text-negative-text"
-            >
-              {t("清空")}
-            </button>
-          )}
-        </div>
-        {history.length === 0 ? (
-          <p className="text-[10px] leading-4 text-muted-foreground/70">
-            {t("搜索并选择一个标的后会记录在这里")}
-          </p>
-        ) : (
-          <div className="flex flex-wrap gap-1">
-            {history.slice(0, HISTORY_SIZE).map((symbol) => {
-              const isActive = symbol === value;
-              return (
-                <button
-                  key={symbol}
-                  type="button"
-                  onClick={() => commit(symbol)}
-                  aria-pressed={isActive}
-                  title={t("点击直接切换回测标的")}
-                  className={`num rounded-md border px-1.5 py-0.5 text-[10.5px] transition-colors ${
-                    isActive
-                      ? "border-accent/50 bg-accent-soft font-medium text-accent"
-                      : "border-border text-muted-foreground hover:border-accent/30 hover:bg-hover hover:text-foreground"
-                  }`}
-                >
-                  {symbol}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
     </div>
   );
 }
