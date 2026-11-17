@@ -36,18 +36,21 @@ import {
 import {
   ALL_SYMBOLS_ID,
   LEGACY_HISTORY_KEY,
+  LEGACY_LIBRARY_KEY,
   LIBRARY_KEY,
   MAX_BACKTEST_GROUPS,
   addSymbol,
-  assignSymbol,
+  clearSymbolGroups,
   createGroup,
   deleteGroup,
   emptyLibrary,
   libraryFromHistory,
+  moveGroup,
   removeSymbol,
   renameGroup,
   sanitizeLibrary,
   symbolsOf,
+  toggleSymbolGroup,
   type BacktestLibrary,
 } from "@/lib/backtest-library";
 import {
@@ -114,9 +117,18 @@ export default function BacktestDashboard() {
           return;
         }
       }
-      const legacy = window.localStorage.getItem(LEGACY_HISTORY_KEY);
-      if (legacy) {
-        const migrated = libraryFromHistory(JSON.parse(legacy));
+      // v1 的归属是单个分组字符串，sanitizeLibrary 会统一升级成数组
+      const legacyLibrary = window.localStorage.getItem(LEGACY_LIBRARY_KEY);
+      if (legacyLibrary) {
+        const migrated = sanitizeLibrary(JSON.parse(legacyLibrary));
+        if (migrated.symbols.length > 0) {
+          setLibrary(migrated);
+          return;
+        }
+      }
+      const legacyHistory = window.localStorage.getItem(LEGACY_HISTORY_KEY);
+      if (legacyHistory) {
+        const migrated = libraryFromHistory(JSON.parse(legacyHistory));
         if (migrated.symbols.length > 0) setLibrary(migrated);
       }
     } catch {
@@ -369,6 +381,22 @@ export default function BacktestDashboard() {
     setLibrary((prev) => removeSymbol(prev, target));
   }
 
+  function toggleLibraryGroup(target: string, groupId: string) {
+    setLibrary((prev) => toggleSymbolGroup(prev, target, groupId));
+  }
+
+  function clearLibraryGroups(target: string) {
+    setLibrary((prev) => clearSymbolGroups(prev, target));
+  }
+
+  function moveLibraryGroup(fromId: string, toId: string) {
+    setLibrary((prev) => {
+      const from = prev.groups.findIndex((group) => group.id === fromId);
+      const to = prev.groups.findIndex((group) => group.id === toId);
+      return moveGroup(prev, from, to);
+    });
+  }
+
   function clearLibrary() {
     setLibrary((prev) => ({ ...prev, symbols: [], assignment: {} }));
     setActiveGroupId(ALL_SYMBOLS_ID);
@@ -607,9 +635,9 @@ export default function BacktestDashboard() {
             onCreateGroup={createLibraryGroup}
             onRenameGroup={renameLibraryGroup}
             onDeleteGroup={deleteLibraryGroup}
-            onAssign={(target, groupId) =>
-              setLibrary((prev) => assignSymbol(prev, target, groupId))
-            }
+            onToggleGroup={toggleLibraryGroup}
+            onClearGroups={clearLibraryGroups}
+            onMoveGroup={moveLibraryGroup}
             onClear={clearLibrary}
             onBatchBacktest={(groupId) => void runBatch(groupId)}
             batch={batch}

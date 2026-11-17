@@ -8,16 +8,19 @@ import {
   MAX_BACKTEST_SYMBOLS,
   UNGROUPED_SYMBOLS_ID,
   addSymbol,
-  assignSymbol,
+  clearSymbolGroups,
   createGroup,
   deleteGroup,
   emptyLibrary,
   groupSections,
+  groupsOfSymbol,
   libraryFromHistory,
+  moveGroup,
   removeSymbol,
   renameGroup,
   sanitizeLibrary,
   symbolsOf,
+  toggleSymbolGroup,
   type BacktestLibrary,
 } from "@/lib/backtest-library";
 import {
@@ -77,7 +80,19 @@ test("sanitizeLibrary：清理非法代码、重名分组与悬空归属", () =>
   assert.equal(library.groups.length, 2);
   assert.equal(library.groups[0].name, "科技");
   assert.ok(library.groups[1].name.length <= MAX_BACKTEST_GROUP_NAME);
-  assert.deepEqual(library.assignment, { AAPL: "g1" });
+  assert.deepEqual(library.assignment, { AAPL: ["g1"] });
+});
+
+test("sanitizeLibrary：v1 单分组字符串升级为数组，并去重", () => {
+  const raw = {
+    symbols: ["AAPL"],
+    groups: [{ id: "g1", name: "科技" }, { id: "g2", name: "指数" }],
+    assignment: { AAPL: ["g1", "g1", "g2", "missing"] },
+  };
+  assert.deepEqual(sanitizeLibrary(raw).assignment, { AAPL: ["g1", "g2"] });
+
+  const legacy = sanitizeLibrary({ ...raw, assignment: { AAPL: "g2" } });
+  assert.deepEqual(legacy.assignment, { AAPL: ["g2"] });
 });
 
 test("sanitizeLibrary：非对象输入返回空库", () => {
@@ -107,7 +122,7 @@ test("addSymbol：去重、移到最前、非法代码忽略、保留分组", ()
 test("addSymbol：超过上限时丢弃最旧标的及其分组", () => {
   const symbols = Array.from({ length: MAX_BACKTEST_SYMBOLS }, (_, i) => `S${i}`);
   let library = libraryWith(symbols);
-  library = { ...library, groups: [{ id: "g1", name: "组" }], assignment: { S39: "g1" } };
+  library = { ...library, groups: [{ id: "g1", name: "组" }], assignment: { S39: ["g1"] } };
 
   const next = addSymbol(library, "NEW");
   assert.equal(next.symbols.length, MAX_BACKTEST_SYMBOLS);
@@ -118,7 +133,7 @@ test("addSymbol：超过上限时丢弃最旧标的及其分组", () => {
 
 test("removeSymbol：同时清掉分组归属", () => {
   let library = libraryWith(["AAPL", "MSFT"]);
-  library = { ...library, groups: [{ id: "g1", name: "科技" }], assignment: { AAPL: "g1" } };
+  library = { ...library, groups: [{ id: "g1", name: "科技" }], assignment: { AAPL: ["g1"] } };
   const next = removeSymbol(library, "AAPL");
   assert.deepEqual(next.symbols, ["MSFT"]);
   assert.deepEqual(next.assignment, {});
@@ -155,45 +170,78 @@ test("renameGroup / deleteGroup：重名拒绝，删除后标的回到未分组"
   assert.equal(renamed.groups[0].name, "成长");
   assert.equal(renameGroup(library, "missing", "X"), null);
 
-  const assigned = assignSymbol({ ...library, symbols: ["AAPL"] }, "AAPL", index.id);
+  const assigned = toggleSymbolGroup({ ...library, symbols: ["AAPL"] }, "AAPL", index.id);
   const removed = deleteGroup(assigned, index.id);
   assert.equal(removed.groups.length, 1);
   assert.deepEqual(removed.assignment, {});
   assert.equal(deleteGroup(removed, "missing"), removed);
 });
 
-test("assignSymbol：未分组 / 非法分组 / 不在库中的代码", () => {
-  let library = createGroup(libraryWith(["AAPL"]), "科技")!.library;
-  const groupId = library.groups[0].id;
+test("toggleSymbolGroup：同一标的可属于多个分组，也可以逐一取消", () => {
+  let library = libraryWith(["AAPL"]);
+  library = { ...library, groups: [{ id: "a", name: "科技" }, { id: "b", name: "成长" }] };
 
-  library = assignSymbol(library, "AAPL", groupId);
-  assert.deepEqual(library.assignment, { AAPL: groupId });
+  library = toggleSymbolGroup(library, "AAPL", "a");
+  library = toggleSymbolGroup(library, "AAPL", "b");
+  assert.deepEqual(library.assignment, { AAPL: ["a", "b"] });
+  assert.deepEqual(
+    groupsOfSymbol(library, "AAPL").map((group) => group.name),
+    ["科技", "成长"],
+  );
 
-  assert.deepEqual(assignSymbol(library, "AAPL", "nope").assignment, { AAPL: groupId });
-  assert.deepEqual(assignSymbol(library, "NVDA", groupId).assignment, { AAPL: groupId });
-  assert.deepEqual(assignSymbol(library, "AAPL", null).assignment, {});
+  library = toggleSymbolGroup(library, "AAPL", "a");
+  assert.deepEqual(library.assignment, { AAPL: ["b"] });
+
+  assert.deepEqual(toggleSymbolGroup(library, "AAPL", "nope").assignment, { AAPL: ["b"] });
+  assert.deepEqual(toggleSymbolGroup(library, "NVDA", "b").assignment, { AAPL: ["b"] });
+
+  assert.deepEqual(clearSymbolGroups(library, "AAPL").assignment, {});
+  assert.equal(clearSymbolGroups(library, "NVDA"), library);
 });
 
 test("groupSections / symbolsOf：分组切段与过滤", () => {
   let library = libraryWith(["AAPL", "MSFT", "NVDA", "SPY"]);
   library = { ...library, groups: [{ id: "a", name: "科技" }, { id: "b", name: "指数" }] };
-  library = assignSymbol(library, "MSFT", "a");
-  library = assignSymbol(library, "AAPL", "a");
-  library = assignSymbol(library, "SPY", "b");
+  library = toggleSymbolGroup(library, "MSFT", "a");
+  library = toggleSymbolGroup(library, "AAPL", "a");
+  library = toggleSymbolGroup(library, "SPY", "b");
+  // AAPL 同时属于两个分组：两个分段里都应出现，且不再算未分组
+  library = toggleSymbolGroup(library, "AAPL", "b");
 
   const sections = groupSections(library);
   assert.deepEqual(
     sections.map((section) => [section.id, section.symbols]),
     [
       ["a", ["AAPL", "MSFT"]],
-      ["b", ["SPY"]],
+      ["b", ["AAPL", "SPY"]],
       [UNGROUPED_SYMBOLS_ID, ["NVDA"]],
     ],
   );
 
   assert.deepEqual(symbolsOf(library, "a"), ["AAPL", "MSFT"]);
+  assert.deepEqual(symbolsOf(library, "b"), ["AAPL", "SPY"]);
   assert.deepEqual(symbolsOf(library, UNGROUPED_SYMBOLS_ID), ["NVDA"]);
   assert.deepEqual(symbolsOf(library, ALL_SYMBOLS_ID), library.symbols);
+});
+
+test("moveGroup：拖动调整分组顺序，越界不动", () => {
+  let library = libraryWith([]);
+  library = {
+    ...library,
+    groups: [{ id: "a", name: "A" }, { id: "b", name: "B" }, { id: "c", name: "C" }],
+  };
+
+  assert.deepEqual(
+    moveGroup(library, 0, 2).groups.map((group) => group.id),
+    ["b", "c", "a"],
+  );
+  assert.deepEqual(
+    moveGroup(library, 2, 0).groups.map((group) => group.id),
+    ["c", "a", "b"],
+  );
+  assert.equal(moveGroup(library, 1, 1), library);
+  assert.equal(moveGroup(library, -1, 0), library);
+  assert.equal(moveGroup(library, 0, 9), library);
 });
 
 /* ------------------------------ 组合回测 ------------------------------ */
