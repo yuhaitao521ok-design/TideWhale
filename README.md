@@ -630,6 +630,8 @@ open-next.config.ts     OpenNext 适配器配置
    git rev-parse HEAD; git rev-parse origin/main   # 两者必须一致
    ```
 
+   > 两个常见副作用：`gh pr merge` 内部会 fetch，紧接着执行 `git pull` 可能报 `cannot lock ref 'refs/remotes/origin/main'`（**合并其实已经成功**，重跑 `git fetch origin --prune` + `git merge --ff-only origin/main` 即可）；`--delete-branch` 只保证删除远程分支，本地同名分支可能残留，用 `git branch -D <branch>` 收尾。
+
 5. **删分支前确认已被吸收**：`git branch --merged main`；未推送的实验分支要确认内容已被后续实现覆盖再删。
 
 6. **清理与验证必须串行**：同一个工具调用里的多条命令可能并行执行，验证会读到清理前的快照（这次出现「分支已删但 `git branch` 还显示」的假象）。把清理和最终校验放进同一条命令按顺序跑。
