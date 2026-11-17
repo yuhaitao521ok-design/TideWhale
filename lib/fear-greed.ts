@@ -1,9 +1,9 @@
-import { cached } from "@/lib/cache";
-
 /**
- * CNN Business 恐惧贪婪指数（Fear & Greed Index）：
+ * CNN Business 恐惧贪婪指数（Fear & Greed Index）的分档、解析与纯函数：
  *   0 = 极度恐惧，100 = 极度贪婪。
- * 数据来自 CNN 的公开 dataviz 接口（无需 Key），只用于「市场全景」的情绪参考。
+ *
+ * 本文件不依赖 fetch / 缓存，可安全被客户端组件引用；
+ * 取数与缓存见 lib/cnn.ts（服务端）。
  */
 
 export type FearGreedRating =
@@ -19,47 +19,45 @@ export interface FearGreedBand {
   min: number;
   /** 区间上界（不含，最高档到 100） */
   max: number;
+  /** 刻度条配色（两端跟随主题，中间固定橙 / 黄 / 青绿） */
+  color: string;
 }
 
 /** 五档刻度：与 CNN 页面一致（0–25 / 25–45 / 45–55 / 55–75 / 75–100） */
 export const FEAR_GREED_BANDS: FearGreedBand[] = [
-  { rating: "extreme-fear", min: 0, max: 25 },
-  { rating: "fear", min: 25, max: 45 },
-  { rating: "neutral", min: 45, max: 55 },
-  { rating: "greed", min: 55, max: 75 },
-  { rating: "extreme-greed", min: 75, max: 100 },
+  { rating: "extreme-fear", min: 0, max: 25, color: "var(--negative)" },
+  { rating: "fear", min: 25, max: 45, color: "#f97316" },
+  { rating: "neutral", min: 45, max: 55, color: "#eab308" },
+  { rating: "greed", min: 55, max: 75, color: "#84cc16" },
+  { rating: "extreme-greed", min: 75, max: 100, color: "var(--positive)" },
 ];
 
-export interface FearGreedHistoryPoint {
-  /** YYYY-MM-DD（UTC） */
-  date: string;
-  score: number;
-  rating: FearGreedRating;
+/** 迷你走势只保留最近 30 个交易日 */
+export const FEAR_GREED_HISTORY_DAYS = 30;
+
+/** 分数夹到 0-100（指针位置与展示用，不参与异常数据的分档判断） */
+export function clampFearGreedScore(score: number): number {
+  if (!Number.isFinite(score)) return 0;
+  return Math.min(100, Math.max(0, score));
 }
 
-export interface FearGreedData {
-  /** 当前分数 0–100 */
-  score: number;
-  rating: FearGreedRating;
-  /** CNN 的更新时间（ISO） */
-  updatedAt: string | null;
-  previousClose: number | null;
-  previousWeek: number | null;
-  previousMonth: number | null;
-  previousYear: number | null;
-  /** 近 30 日走势（统一按时间升序） */
-  history: FearGreedHistoryPoint[];
-  fetchedAt: string;
-}
-
-/** 按分数归档；边界取「下界」，100 归入极度贪婪 */
+/** 按分数归档；非法值落到「中性」，避免把脏数据说成极度恐惧 */
 export function classifyFearGreed(score: number): FearGreedRating {
   if (!Number.isFinite(score)) return "neutral";
-  const value = Math.min(100, Math.max(0, score));
+  const value = clampFearGreedScore(score);
   for (const band of FEAR_GREED_BANDS) {
     if (value < band.max) return band.rating;
   }
   return "extreme-greed";
+}
+
+/** 分数对应的整档（含配色），组件用来给刻度条与指针上色 */
+export function fearGreedBand(score: number): FearGreedBand {
+  const value = clampFearGreedScore(score);
+  return (
+    FEAR_GREED_BANDS.find((band) => value < band.max) ??
+    FEAR_GREED_BANDS[FEAR_GREED_BANDS.length - 1]
+  );
 }
 
 /** 兼容 CNN 返回的 rating 文案（如 "extreme fear"）；无法识别时按分数归档 */
@@ -86,34 +84,66 @@ export function normalizeFearGreedRating(
   }
 }
 
+export interface FearGreedHistoryPoint {
+  /** YYYY-MM-DD（UTC） */
+  date: string;
+  score: number;
+  rating: FearGreedRating;
+}
+
+export interface FearGreedData {
+  /** 当前分数 0–100（保留 CNN 原始精度，展示时取 1 位小数） */
+  score: number;
+  rating: FearGreedRating;
+  /** CNN 自己的更新时间（ISO） */
+  updatedAt: string | null;
+  previousClose: number | null;
+  previousWeek: number | null;
+  previousMonth: number | null;
+  previousYear: number | null;
+  /** 近 30 日走势（按时间升序，同一天只保留最后一个点） */
+  history: FearGreedHistoryPoint[];
+  fetchedAt: string;
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
-const HISTORY_DAYS = 30;
 
 function toFiniteNumber(value: unknown): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
+    const parsed = Number.parseFloat(value);
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
 }
 
-/** 解析 CNN graphdata 响应；格式异常时抛出，路由会把失败限制在本卡片 */
+/**
+ * 解析 CNN graphdata 响应（纯函数，方便单测）。
+ *
+ * 规则：
+ *  - 只要求当前分数存在；对比值 / 历史缺失时降级为 null / 空数组
+ *  - 历史数据以「最新一个点」回溯 30 天，同一天只保留最后一个点（CNN 盘中会给多个点）
+ *  - 脏行（x / y 缺失）直接跳过，不做猜测
+ *  - 格式异常（缺 score）抛错，由 lib/cnn.ts 包装成 CnnError
+ */
 export function parseFearGreed(payload: unknown): FearGreedData {
-  const root = payload as {
-    fear_and_greed?: {
-      score?: unknown;
-      rating?: unknown;
-      timestamp?: unknown;
-      previous_close?: unknown;
-      previous_1_week?: unknown;
-      previous_1_month?: unknown;
-      previous_1_year?: unknown;
-    } | null;
-    fear_and_greed_historical?: {
-      data?: Array<{ x?: unknown; y?: unknown; rating?: unknown }> | null;
-    } | null;
-  } | null;
+  const root = payload as
+    | {
+        fear_and_greed?: {
+          score?: unknown;
+          rating?: unknown;
+          timestamp?: unknown;
+          previous_close?: unknown;
+          previous_1_week?: unknown;
+          previous_1_month?: unknown;
+          previous_1_year?: unknown;
+        } | null;
+        fear_and_greed_historical?: {
+          data?: Array<{ x?: unknown; y?: unknown; rating?: unknown }> | null;
+        } | null;
+      }
+    | null
+    | undefined;
 
   const current = root?.fear_and_greed;
   const score = toFiniteNumber(current?.score);
@@ -128,7 +158,8 @@ export function parseFearGreed(payload: unknown): FearGreedData {
       : null;
 
   const points: { at: number; score: number; rating: FearGreedRating }[] = [];
-  for (const item of root?.fear_and_greed_historical?.data ?? []) {
+  const rows = root?.fear_and_greed_historical?.data;
+  for (const item of Array.isArray(rows) ? rows : []) {
     const at = toFiniteNumber(item?.x);
     const value = toFiniteNumber(item?.y);
     if (at === null || value === null) continue;
@@ -143,16 +174,15 @@ export function parseFearGreed(payload: unknown): FearGreedData {
   }
   points.sort((left, right) => left.at - right.at);
 
-  // 以最新一个点为准回溯 30 天；同一天只保留最后一个点
   const latest = points[points.length - 1]?.at ?? null;
-  const cutoff = latest === null ? null : latest - HISTORY_DAYS * DAY_MS;
+  const cutoff = latest === null ? null : latest - FEAR_GREED_HISTORY_DAYS * DAY_MS;
   const byDate = new Map<string, FearGreedHistoryPoint>();
   for (const point of points) {
     if (cutoff !== null && point.at < cutoff) continue;
     const date = new Date(point.at).toISOString().slice(0, 10);
     byDate.set(date, { date, score: point.score, rating: point.rating });
   }
-  const history = [...byDate.values()].slice(-HISTORY_DAYS);
+  const history = [...byDate.values()].slice(-FEAR_GREED_HISTORY_DAYS);
 
   return {
     score,
@@ -166,35 +196,3 @@ export function parseFearGreed(payload: unknown): FearGreedData {
     fetchedAt: new Date().toISOString(),
   };
 }
-
-const CNN_FEAR_GREED_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata";
-
-/** CNN 对无浏览器特征（缺 Referer / UA）的请求会返回 418，这里固定一套浏览器头 */
-const CNN_HEADERS: Record<string, string> = {
-  "user-agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-  accept: "application/json, text/plain, */*",
-  "accept-language": "en-US,en;q=0.9",
-  referer: "https://www.cnn.com/markets/fear-and-greed",
-  origin: "https://www.cnn.com",
-};
-
-/** 拉取 CNN 恐惧贪婪指数（缓存 60s；失败由路由降级为单卡片报错） */
-export async function getFearGreed(): Promise<
-  FearGreedData & { cached: boolean; stale: boolean }
-> {
-  const result = await cached("fear-greed:cnn", 60, 300, async () => {
-    const response = await fetch(CNN_FEAR_GREED_URL, {
-      headers: CNN_HEADERS,
-      cache: "no-store",
-      signal: AbortSignal.timeout(12_000),
-    });
-    if (!response.ok) {
-      throw new Error(`CNN 恐惧贪婪接口不可用（${response.status}）`);
-    }
-    return parseFearGreed(await response.json());
-  });
-
-  return { ...result.value, cached: result.cached, stale: result.stale };
-}
-

@@ -1,24 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import Sparkline from "@/components/Sparkline";
-import { formatNumber, formatSigned } from "@/lib/format";
+import { formatNumber, formatSigned, formatTimeInZone } from "@/lib/format";
 import {
   FEAR_GREED_BANDS,
+  clampFearGreedScore,
+  fearGreedBand,
   type FearGreedData,
   type FearGreedRating,
 } from "@/lib/fear-greed";
 
-const BAND_COLORS: Record<FearGreedRating, string> = {
-  "extreme-fear": "var(--negative)",
-  fear: "#f97316",
-  neutral: "#eab308",
-  greed: "#84cc16",
-  "extreme-greed": "var(--positive)",
-};
+/** CNN 的指数每隔几分钟才更新一次，不需要跟着行情 30 秒轮询 */
+const POLL_MS = 300_000;
 
-const RATING_CLASS: Record<FearGreedRating, string> = {
+/** 文字用与卡片底色对比度更高的语义色，刻度条用 FEAR_GREED_BANDS 里的颜色 */
+const RATING_TEXT_CLASS: Record<FearGreedRating, string> = {
   "extreme-fear": "text-negative-text",
   fear: "text-orange-500",
   neutral: "text-amber-500",
@@ -26,43 +24,60 @@ const RATING_CLASS: Record<FearGreedRating, string> = {
   "extreme-greed": "text-positive-text",
 };
 
+interface FearGreedCardProps {
+  /** 跟随行情页的「自动刷新」开关；暂停时不轮询 */
+  autoRefresh?: boolean;
+}
+
 /** 市场全景：CNN Business 恐惧贪婪指数（独立请求，失败只影响本卡片） */
-export default function FearGreedCard() {
+export default function FearGreedCard({ autoRefresh = true }: FearGreedCardProps) {
   const { t } = useI18n();
   const [data, setData] = useState<FearGreedData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** 只接受最后一次请求的结果，避免慢请求覆盖新数据 */
+  const requestRef = useRef(0);
 
   const load = useCallback(async (signal?: AbortSignal) => {
+    const requestId = ++requestRef.current;
     try {
-      const response = await fetch("/api/fear-greed", {
-        cache: "no-store",
-        signal,
-      });
+      const response = await fetch("/api/fear-greed", { cache: "no-store", signal });
       if (!response.ok) {
         const body = (await response.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error || `加载失败（${response.status}）`);
       }
       const next = (await response.json()) as FearGreedData;
+      if (requestId !== requestRef.current) return;
       setData(next);
       setError(null);
     } catch (cause) {
-      if (signal?.aborted) return;
+      if (signal?.aborted || requestId !== requestRef.current) return;
       setError(cause instanceof Error ? cause.message : "加载失败");
     } finally {
-      if (!signal?.aborted) setLoading(false);
+      if (!signal?.aborted && requestId === requestRef.current) setLoading(false);
     }
   }, []);
 
+  // 首屏加载（卸载时中止）
   useEffect(() => {
     const controller = new AbortController();
     void load(controller.signal);
-    const timer = window.setInterval(() => void load(controller.signal), 60_000);
-    return () => {
-      controller.abort();
-      window.clearInterval(timer);
-    };
+    return () => controller.abort();
   }, [load]);
+
+  // 「自动刷新」开启时每 5 分钟拉一次；关闭后立刻停止轮询
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const timer = window.setInterval(() => void load(), POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [autoRefresh, load]);
+
+  const band = data ? fearGreedBand(data.score) : null;
+
+  const retry = () => {
+    setError(null);
+    void load();
+  };
 
   const ratingLabel = (rating: FearGreedRating) =>
     rating === "extreme-fear"
@@ -99,10 +114,7 @@ export default function FearGreedCard() {
           </p>
           <button
             type="button"
-            onClick={() => {
-              setError(null);
-              void load();
-            }}
+            onClick={retry}
             className="h-6 rounded border border-border px-2 text-[10px] text-muted-foreground transition-colors hover:bg-hover hover:text-foreground"
           >
             {t("重试")}
@@ -122,10 +134,12 @@ export default function FearGreedCard() {
           <div className="flex items-end justify-between gap-2">
             <div className="min-w-0">
               <div className="flex items-baseline gap-2">
-                <span className="num text-[32px] font-medium leading-none text-foreground">
+                <span
+                  className={`num text-[32px] font-medium leading-none ${RATING_TEXT_CLASS[data.rating]}`}
+                >
                   {formatNumber(data.score, 1)}
                 </span>
-                <span className={`text-[13px] font-medium ${RATING_CLASS[data.rating]}`}>
+                <span className={`text-[13px] font-medium ${RATING_TEXT_CLASS[data.rating]}`}>
                   {ratingLabel(data.rating)}
                 </span>
               </div>
@@ -133,29 +147,30 @@ export default function FearGreedCard() {
                 {t("0 = 极度恐惧，100 = 极度贪婪")}
               </p>
             </div>
-            <span className="num shrink-0 text-[9px] text-muted-foreground/70">
-              {t("今日")}
-            </span>
+            <span className="num shrink-0 text-[9px] text-muted-foreground/70">{t("今日")}</span>
           </div>
 
           <div>
             <div className="relative h-2.5 overflow-hidden rounded-full">
               <div className="flex h-full w-full">
-                {FEAR_GREED_BANDS.map((band) => (
+                {FEAR_GREED_BANDS.map((item) => (
                   <span
-                    key={band.rating}
+                    key={item.rating}
                     className="h-full opacity-80"
                     style={{
-                      width: `${band.max - band.min}%`,
-                      backgroundColor: BAND_COLORS[band.rating],
+                      width: `${item.max - item.min}%`,
+                      backgroundColor: item.color,
                     }}
                   />
                 ))}
               </div>
               <span
                 aria-hidden="true"
-                className="absolute top-1/2 h-4 w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-foreground shadow-sm ring-2 ring-card"
-                style={{ left: `${Math.min(100, Math.max(0, data.score))}%` }}
+                className="absolute top-1/2 h-4 w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full shadow-sm ring-2 ring-card"
+                style={{
+                  left: `${clampFearGreedScore(data.score)}%`,
+                  backgroundColor: band?.color,
+                }}
               />
             </div>
             <div className="num mt-0.5 flex justify-between text-[8.5px] text-muted-foreground/70">
@@ -207,7 +222,8 @@ export default function FearGreedCard() {
               </p>
               {data.history.length > 1 && (
                 <span className="num text-[8.5px] text-muted-foreground/60">
-                  {data.history[0].date.slice(5)} → {data.history[data.history.length - 1].date.slice(5)}
+                  {data.history[0].date.slice(5)} →{" "}
+                  {data.history[data.history.length - 1].date.slice(5)}
                 </span>
               )}
             </div>
@@ -218,11 +234,30 @@ export default function FearGreedCard() {
             />
           </div>
 
+          {error && (
+            <button
+              type="button"
+              onClick={retry}
+              title={error}
+              className="w-full rounded-md border border-border px-2 py-1 text-left text-[9px] text-muted-foreground transition-colors hover:bg-hover hover:text-foreground"
+            >
+              {t("加载失败，请重试")}
+            </button>
+          )}
+
           <p className="flex items-center justify-between gap-2 border-t border-border/60 pt-2 text-[8.5px] text-muted-foreground/70">
             <span>{t("CNN Business · 仅供情绪参考")}</span>
             {data.updatedAt && (
               <span className="num" title={data.updatedAt}>
-                {data.updatedAt.slice(0, 10)}
+                {t("更新于")}{" "}
+                {formatTimeInZone(data.updatedAt, "America/New_York", {
+                  month: "2-digit",
+                  day: "2-digit",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  hour12: false,
+                })}{" "}
+                ET
               </span>
             )}
           </p>
@@ -231,4 +266,3 @@ export default function FearGreedCard() {
     </section>
   );
 }
-

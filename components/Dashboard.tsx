@@ -2465,7 +2465,7 @@ export default function Dashboard() {
               selected={selected}
               onSelect={selectFromPanel}
             />
-            <FearGreedCard />
+            <FearGreedCard autoRefresh={autoRefresh} />
             {marketsError && (
               <button
                 type="button"
