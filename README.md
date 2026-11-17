@@ -594,6 +594,105 @@ open-next.config.ts     OpenNext 适配器配置
 - 需要平台后台操作（Cloudflare Dashboard 构建命令、Vercel 设置、DNS、Secrets、账单）
 - 本地闸门多次修复仍不通过
 
+## 踩坑记录（Git · Windows 终端 · 部署）
+
+> 下面都是实际踩过的坑，开工 / 合并 / 部署前扫一眼，能少返工。
+
+### Git 与协作
+
+1. **开工前先同步，别在旧 main 上写代码**
+
+   ```bash
+   git fetch origin --prune
+   git pull --ff-only
+   git log --oneline origin/main -15
+   ```
+
+   这次就因为本地 `main` 落后 4 个提交（云端已合并 #114 / #115）还在旧提交上开工，做了一版重复实现，最后只能融合重做。
+
+2. **先查是不是已经有人做了**
+
+   ```bash
+   git ls-tree -r origin/main --name-only | Select-String -Pattern '关键词'
+   gh pr list --state all --limit 10
+   ```
+
+   同名功能 / 页面优先在 `origin/main` 的文件和最近的 PR 里找，别急着新建文件。
+
+3. **本地跑通 ≠ 交付完成**：完成的定义是 issue → 分支 → PR → 合并 → 线上验证。只在本地 commit（甚至没 push）等于没做。`gh pr create` 之后要用 `gh pr list --head <branch>` 确认 PR 真的建出来了（命令失败可能被终端吞掉，这次就漏过一次）。
+
+4. **合并前先切回 main**，避免 `--delete-branch` 删掉当前分支：
+
+   ```bash
+   git checkout main
+   gh pr merge <n> --merge --delete-branch
+   git pull --ff-only
+   git rev-parse HEAD; git rev-parse origin/main   # 两者必须一致
+   ```
+
+5. **删分支前确认已被吸收**：`git branch --merged main`；未推送的实验分支要确认内容已被后续实现覆盖再删。
+
+6. **清理与验证必须串行**：同一个工具调用里的多条命令可能并行执行，验证会读到清理前的快照（这次出现「分支已删但 `git branch` 还显示」的假象）。把清理和最终校验放进同一条命令按顺序跑。
+
+### Cline 检查点不是分支（GitLens 里那一堆线）
+
+- `cline checkpoint session=...`、`untracked files on cline checkpoint`、`index on main: ...` 是 Cline 的 `refs/cline/checkpoints/*`，用于「Restore Checkpoint」，**不是分支**。
+- 查看：`git for-each-ref --format='%(refname)' | Select-String cline`
+- 清理（旧检查点将无法恢复，代码本身不受影响）：
+
+  ```powershell
+  git for-each-ref --format='%(refname)' refs/cline/checkpoints | ForEach-Object { git update-ref -d $_ }
+  ```
+
+- 不想反复出现：在 Cline 设置里关闭 Checkpoints，或定期清理。
+
+### Windows（PowerShell 5.1）终端
+
+- **中文乱码 / `npm` 显示成 `pm`**：控制台按 GBK 解码 node 的 UTF-8 输出。把下面写进 `$PROFILE.CurrentUserAllHosts`（`C:\Users\<你>\Documents\WindowsPowerShell\profile.ps1`），新开终端生效：
+
+  ```powershell
+  $utf8 = New-Object System.Text.UTF8Encoding $false
+  [Console]::OutputEncoding = $utf8
+  $OutputEncoding = $utf8
+  $env:NO_COLOR = '1'
+  $env:npm_config_progress = 'false'
+  ```
+
+- `npm test` 的横幅带 `\r`，在捕获的日志里会显示成 `pm test`；用 `npm test --loglevel=error` 或直接 `node scripts/test.mjs`。
+- `git` / `gh` 的 stderr 在 PowerShell 会显示成红色 `NativeCommandError`（例如 `Switched to a new branch`），不代表失败；用 `2>&1 | Out-String` 合并输出，以实际结果为准。
+- `gh api --jq '.a[] | "\(.x) | \(.y)"'` 的格式串会被 PowerShell 拆成多个参数 → 用 `gh api ... | ConvertFrom-Json` 再格式化。
+- 多行 PR / issue 正文用 `--body-file` + 无 BOM UTF-8，避免引号与 here-string 被吞：
+
+  ```powershell
+  [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))
+  gh pr create ... --body-file $path
+  ```
+
+### 部署后确认新版本真的生效
+
+- Workers Builds 的 check run 变 `completed / success` 后，边缘还有 30–60 秒传播与缓存，别立刻下结论。
+- 用一个**只有新版本才有的探针**判断，并加随机 query 绕缓存：
+
+  ```powershell
+  Invoke-WebRequest -UseBasicParsing "https://data-insider.yuhaitao521ok.workers.dev/api/fear-greed?t=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+  ```
+
+  本次探针是响应头 `X-Data-Source: cnn`；首页 SSR HTML 只能证明组件存在，不能证明版本（数据区是客户端加载的）。
+
+- 构建命令必须是 `npm run build:cf`；`npm run build` 只产 `.next`，随后的 `wrangler deploy` 会报 `Could not find compiled Open Next config`。
+
+### 恐惧贪婪指数（CNN）的实现约定
+
+- `lib/fear-greed.ts` 只放纯函数 / 类型（客户端会 import）；**不要**在里面 import fetch / `cached`，取数放 `lib/cnn.ts`，否则服务端代码会被打进客户端 bundle。
+- CNN 的 `fear_and_greed_historical.data` 盘中会给多个点：按天去重（保留最后一个），并以最新点回溯 30 天，不能简单 `slice(-30)`（30 个自然日通常只有 21 个交易日）。
+- 轮询 5 分钟即可，并且要跟随行情页的「自动刷新」开关；固定 60 秒既浪费又违背「可一键暂停」。
+- 展示用 1 位小数，指针位置 `clamp(0,100)`；`NaN` 归档「中性」，不要当作极度恐惧。
+- CNN 对缺少 UA / Referer 的请求返回 418；云端出口 IP 可能被地区风控，失败只影响这张卡片（卡片内重试），不要并入 `/api/markets`。
+
+### 分批编辑大文件后立刻 typecheck
+
+本次用多次 `editor` 替换重写组件时，第二次替换把三元的 `) : (` 一起删掉，直接报 `TS2657 / TS1005`。分批改 JSX / TSX 时：**每次写完先 `npm run typecheck`**，不要攒到最后。
+
 ## 界面与主题
 
 顶部导航（桌面端）只有 **行情** 一项（配 AI Key 时多一个「AI 解读」），按 OpenRouter 风格：14px 中等字重 + 图标，hover 浅底 + 底部强调色下划线。**hover / 点击「行情」展开下拉**，包含：
