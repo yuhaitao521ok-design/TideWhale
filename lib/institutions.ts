@@ -1,5 +1,6 @@
 import { cached } from "@/lib/cache";
 import { requestNasdaq } from "@/lib/nasdaq";
+import type { CongressFiling, CongressTrade } from "@/lib/congress-parse";
 
 /**
  * 机构持仓数据：
@@ -104,12 +105,35 @@ export interface SuperInvestor {
   name: string;
   /** 中文显示名 */
   nameZh: string;
-  cik: string;
+  /** SEC CIK（13F 名人）；国会披露没有 CIK */
+  cik?: string;
   fund: string;
+  /**
+   * 数据来源：
+   *  - `13f`（默认）SEC EDGAR 季度 13F
+   *  - `congress` 众议院 Clerk 的 STOCK Act 定期交易报告（PTR）
+   * 两者口径完全不同，聚合与相关性统计只使用 13f。
+   */
+  source?: "13f" | "congress";
+  /** 国会成员在 Clerk 索引里的姓名与选区（source=congress 时必填） */
+  congress?: {
+    last: string;
+    first: string;
+    /** 州 + 选区，如 CA11 */
+    stateDst: string;
+  };
 }
 
 /** 预置的超级投资者（CIK 来自 SEC EDGAR） */
 export const SUPER_INVESTORS: SuperInvestor[] = [
+  {
+    id: "pelosi",
+    name: "Nancy Pelosi",
+    nameZh: "佩洛西 · 国会山股神",
+    fund: "Hon. Nancy Pelosi (CA-11)",
+    source: "congress",
+    congress: { last: "Pelosi", first: "Nancy", stateDst: "CA11" },
+  },
   { id: "berkshire", name: "Berkshire Hathaway", nameZh: "伯克希尔 · 巴菲特", cik: "0001067983", fund: "Berkshire Hathaway Inc" },
   { id: "bridgewater", name: "Bridgewater Associates", nameZh: "桥水 · 达利欧", cik: "0001350694", fund: "Bridgewater Associates LP" },
   { id: "scion", name: "Scion Asset Management", nameZh: "Scion · 迈克尔·伯里", cik: "0001649339", fund: "Scion Asset Management" },
@@ -578,10 +602,117 @@ export interface ThirteenFResult {
   /** 最新季度对比上季的全部调仓（供持仓表「较上季」列使用） */
   latestChanges: PositionChange[];
   fetchedAt: string;
+  /** 数据来源：13F（默认）或国会 PTR 披露 */
+  source?: "13f" | "congress";
+  /** 国会披露的交易明细（source=congress 时才有） */
+  trades?: CongressTrade[];
+  /** 国会披露的 PTR 文件列表（source=congress 时才有） */
+  filings?: CongressFiling[];
+  /** 成功解析 / 解析失败的 PTR 数量（扫描件或格式异常会失败） */
+  parsedFilings?: number;
+  failedFilings?: number;
 }
 
 /** 总览页用的精简 13F（去掉持仓明细与大列表，减小传输体积） */
-export type ThirteenFSummary = Omit<ThirteenFResult, "holdings" | "latestChanges">;
+export type ThirteenFSummary = Omit<ThirteenFResult, "holdings" | "latestChanges" | "trades">;
+
+/** 某天所在的季度末日期（`2026-01-16` → `2026-03-31`） */
+export function quarterEndOf(date: string): string {
+  const match = /^(\d{4})-(\d{2})/.exec(date);
+  if (!match) return date;
+  const year = match[1];
+  const month = Number(match[2]);
+  const ends = ["03-31", "06-30", "09-30", "12-31"];
+  const index = Math.min(3, Math.max(0, Math.ceil(month / 3) - 1));
+  return `${year}-${ends[index]}`;
+}
+
+/** 上一个季度末（`2026-03-31` → `2025-12-31`） */
+function previousQuarterEnd(quarter: string): string | null {
+  const match = /^(\d{4})-(\d{2})-\d{2}$/.exec(quarter);
+  if (!match) return null;
+  const ends = ["03-31", "06-30", "09-30", "12-31"];
+  const index = ends.indexOf(quarter.slice(5));
+  if (index < 0) return null;
+  if (index === 0) return `${Number(match[1]) - 1}-12-31`;
+  return `${match[1]}-${ends[index - 1]}`;
+}
+
+/**
+ * 把国会交易按「交易日期所在季度」聚合成与 13F 相同的 QuarterChange：
+ *   - 金额只有区间，用中值估算（`amountMid`），不是真实成交额
+ *   - 没有股数与持仓快照，`shares / changePercent` 恒为 null
+ *   - 同一季度同一标的合并成一条，方便复用榜单组件
+ */
+export function buildCongressQuarters(
+  trades: CongressTrade[],
+  maxQuarters = 4,
+): QuarterChange[] {
+  const byQuarter = new Map<string, CongressTrade[]>();
+  for (const trade of trades) {
+    if (trade.side === "exchange" || !trade.amountMid || trade.amountMid <= 0) continue;
+    const key = quarterEndOf(trade.tradeDate);
+    const list = byQuarter.get(key);
+    if (list) list.push(trade);
+    else byQuarter.set(key, [trade]);
+  }
+
+  const toChanges = (list: CongressTrade[], side: "buy" | "sell"): PositionChange[] => {
+    const merged = new Map<string, PositionChange>();
+    for (const trade of list) {
+      if (trade.side !== side) continue;
+      const key = trade.ticker ?? trade.asset;
+      const amount = trade.amountMid ?? 0;
+      const existing = merged.get(key);
+      if (existing) {
+        const value = (existing.value ?? 0) + amount;
+        merged.set(key, { ...existing, value, valueChange: value * (side === "buy" ? 1 : -1) });
+        continue;
+      }
+      merged.set(key, {
+        cusip: key,
+        issuer: trade.asset,
+        titleOfClass: trade.assetType ?? "",
+        putCall: null,
+        shares: null,
+        prevShares: null,
+        shareChange: null,
+        changePercent: null,
+        value: amount,
+        prevValue: null,
+        valueChange: side === "buy" ? amount : -amount,
+        action: side === "buy" ? "add" : "reduce",
+      });
+    }
+    return [...merged.values()].sort((left, right) => (right.value ?? 0) - (left.value ?? 0));
+  };
+
+  return [...byQuarter.entries()]
+    .sort((left, right) => (left[0] < right[0] ? 1 : left[0] > right[0] ? -1 : 0))
+    .slice(0, maxQuarters)
+    .map(([quarter, list]) => {
+      const buys = toChanges(list, "buy");
+      const sells = toChanges(list, "sell");
+      const sum = (items: PositionChange[]) =>
+        items.reduce((total, item) => total + Math.abs(item.value ?? 0), 0);
+      return {
+        quarter,
+        filedAt: list.reduce<string | null>(
+          (latest, trade) => (!latest || trade.filedAt > latest ? trade.filedAt : latest),
+          null,
+        ),
+        previousQuarter: previousQuarterEnd(quarter),
+        positions: new Set(list.map((trade) => trade.ticker ?? trade.asset)).size,
+        totalValue: 0,
+        buys,
+        sells,
+        buysCount: buys.length,
+        sellsCount: sells.length,
+        buysValue: sum(buys),
+        sellsValue: sum(sells),
+      };
+    });
+}
 
 /**
  * 13F 申报的 value 单位不统一：有的按美元、有的按千美元。
@@ -736,14 +867,22 @@ async function fetchQuarterHoldings(cik: string, accession: string): Promise<Hol
   return holdings;
 }
 
+/** 13F 专用数据源要求有 CIK；国会披露（PTR）走 lib/congress.ts，不经过这里 */
+function requireCik(investor: SuperInvestor): string {
+  if (!investor.cik) {
+    throw new Error(`${investor.nameZh} 使用国会披露（PTR），没有 SEC 13F 数据`);
+  }
+  return investor.cik;
+}
+
 /** 13F 详情 / 总览摘要共用的缓存 key（显式刷新时按同一 key 失效） */
 export function thirteenFCacheKey(investor: SuperInvestor): string {
-  return `13f:${investor.cik}`;
+  return `13f:${requireCik(investor)}`;
 }
 
 /** 名人相关性（季度收益序列）缓存 key */
 export function correlationCacheKey(investor: SuperInvestor, quarters: number): string {
-  return `13f-series:${investor.cik}:${quarters}`;
+  return `13f-series:${requireCik(investor)}:${quarters}`;
 }
 
 /** 拉取最近 N 份 13F 的季度快照（新→旧），供详情页与相关性分析共用 */
@@ -751,8 +890,9 @@ async function loadSnapshots(
   investor: SuperInvestor,
   filingCount: number,
 ): Promise<{ entityName: string; snapshots: QuarterSnapshot[] }> {
+  const cik = requireCik(investor);
   const submissionsResponse = await secFetchWithRetry(
-    `https://data.sec.gov/submissions/CIK${investor.cik}.json`,
+    `https://data.sec.gov/submissions/CIK${cik}.json`,
     12_000,
   );
   if (!submissionsResponse.ok) {
@@ -767,7 +907,7 @@ async function loadSnapshots(
   for (let index = 0; index < filings.length; index += 1) {
     const filing = filings[index];
     try {
-      const holdings = await fetchQuarterHoldings(investor.cik, filing.accession);
+      const holdings = await fetchQuarterHoldings(cik, filing.accession);
       snapshots.push({
         quarter: filing.period ?? filing.filedAt ?? filing.accession,
         filedAt: filing.filedAt,

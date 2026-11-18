@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import PageShell from "@/components/PageShell";
 import { useI18n } from "@/lib/i18n";
 import { formatCompact, formatNumber, formatPercent } from "@/lib/format";
+import CongressTradesCard from "@/components/institutions/CongressTrades";
 import {
   SUPER_INVESTORS,
   TOP_CHANGES_LIMIT,
@@ -39,6 +40,11 @@ interface CorrelationEntry {
 }
 
 const SYMBOL_RE = /^[A-Z0-9.^=-]{1,12}$/;
+/**
+ * 13F 口径的名人：国会披露（PTR）只有交易、没有季度持仓快照，
+ * 若混进「合计净额 / 跨机构 Top / 相关性」会把两种口径算在一起，因此单独排除。
+ */
+const FUND_INVESTORS = SUPER_INVESTORS.filter((item) => (item.source ?? "13f") === "13f");
 // v2：每季明细从 10 条扩到 20 条（加仓 / 减仓榜单改为 Top 10），
 // 旧缓存的明细不够聚合 Top 10，换 key 强制重拉一次。
 const OVERVIEW_CACHE_KEY = "institutions:overview:v2";
@@ -126,12 +132,15 @@ function ChangeList({
   items,
   count,
   empty,
+  amountOnly = false,
 }: {
   title: string;
   tone: "positive" | "negative";
   items: PositionChange[];
   count?: number;
   empty: string;
+  /** 国会披露没有股数变动比例，直接展示金额（区间中值） */
+  amountOnly?: boolean;
 }) {
   const { t } = useI18n();
   return (
@@ -186,7 +195,7 @@ function ChangeList({
                       item.action === "add" ? "text-positive-text" : "text-negative-text"
                     }
                   >
-                    {formatPercent(item.changePercent, 1)}
+                    {amountOnly ? signedMoney(item.valueChange) : formatPercent(item.changePercent, 1)}
                   </span>
                 )}
                 <span className="ml-1 text-muted-foreground">{signedMoney(item.valueChange)}</span>
@@ -271,6 +280,7 @@ function OverviewCard({
   }
 
   const filing = entry.filing;
+  const isCongress = (filing.source ?? "13f") === "congress";
   const latest = filing.quarters[0];
   const latestNet = latest ? latest.buysValue - latest.sellsValue : 0;
   // 只取所选报告期的调仓；该季度未申报时卡片单独展示「本期未披露」
@@ -281,12 +291,15 @@ function OverviewCard({
   const trendQuarters = quarter
     ? filing.quarters.filter((item) => item.quarter <= quarter)
     : filing.quarters;
-  const changeLabel = (item: PositionChange) =>
-    item.action === "new"
+  const changeLabel = (item: PositionChange) => {
+    // 国会披露没有股数变动比例，只有金额区间中值
+    if (isCongress) return signedMoney(item.value);
+    return item.action === "new"
       ? t("新建仓")
       : item.action === "exit"
         ? t("清仓")
         : formatPercent(item.changePercent, 0);
+  };
 
   return (
     <button
@@ -302,9 +315,16 @@ function OverviewCard({
             {filing.entityName || investor.fund}
           </p>
         </div>
-        <span className="num shrink-0 rounded bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">
-          {quarterLabel(quarter)}
-          {!change && <span className="ml-1 text-muted-foreground/60">· {t("未披露")}</span>}
+        <span className="flex shrink-0 flex-col items-end gap-1">
+          <span className="num rounded bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">
+            {quarterLabel(quarter)}
+            {!change && <span className="ml-1 text-muted-foreground/60">· {t("未披露")}</span>}
+          </span>
+          {isCongress && (
+            <span className="rounded bg-accent-soft px-1.5 py-0.5 text-[8.5px] font-medium text-accent">
+              {t("国会披露")}
+            </span>
+          )}
         </span>
       </div>
 
@@ -343,7 +363,8 @@ function OverviewCard({
                 {signedMoney(net)}
               </p>
               <p className="truncate text-[9px] text-muted-foreground">
-                {net >= 0 ? t("净买入") : t("净卖出")} · {t("持仓")} {filing.totalPositions}
+                {net >= 0 ? t("净买入") : t("净卖出")} · {isCongress ? t("交易") : t("持仓")}{" "}
+                {filing.totalPositions}
               </p>
             </div>
             <div className="shrink-0">
@@ -356,7 +377,9 @@ function OverviewCard({
 
           <div className="space-y-1 border-t border-border/60 pt-2">
             <div className="flex items-baseline gap-1.5 text-[10px]">
-              <span className="w-7 shrink-0 text-positive-text">{t("加仓")}</span>
+              <span className="w-7 shrink-0 text-positive-text">
+                {isCongress ? t("买入") : t("加仓")}
+              </span>
               <span className="min-w-0 flex-1 truncate text-foreground/85" title={topBuy?.cusip}>
                 {topBuy?.issuer ?? "--"}
               </span>
@@ -365,7 +388,9 @@ function OverviewCard({
               </span>
             </div>
             <div className="flex items-baseline gap-1.5 text-[10px]">
-              <span className="w-7 shrink-0 text-negative-text">{t("减仓")}</span>
+              <span className="w-7 shrink-0 text-negative-text">
+                {isCongress ? t("卖出") : t("减仓")}
+              </span>
               <span className="min-w-0 flex-1 truncate text-foreground/85" title={topSell?.cusip}>
                 {topSell?.issuer ?? "--"}
               </span>
@@ -377,7 +402,8 @@ function OverviewCard({
 
           <div className="flex items-center justify-between text-[9px] text-muted-foreground/70">
             <span className="num">
-              {t("加仓")} {change.buysCount} · {t("减仓")} {change.sellsCount}
+              {isCongress ? t("买入") : t("加仓")} {change.buysCount} ·{" "}
+              {isCongress ? t("卖出") : t("减仓")} {change.sellsCount}
             </span>
             <span className="text-accent">{t("查看详情")} →</span>
           </div>
@@ -577,7 +603,7 @@ export default function InstitutionsDashboard() {
   const [ownershipLoading, setOwnershipLoading] = useState(false);
   const [ownershipError, setOwnershipError] = useState<string | null>(null);
 
-  const [investorId, setInvestorId] = useState(SUPER_INVESTORS[0].id);
+  const [investorId, setInvestorId] = useState(FUND_INVESTORS[0].id);
   const [filing, setFiling] = useState<ThirteenFResult | null>(null);
   const [filingLoading, setFilingLoading] = useState(true);
   const [filingError, setFilingError] = useState<string | null>(null);
@@ -598,7 +624,7 @@ export default function InstitutionsDashboard() {
   const [corrHydrated, setCorrHydrated] = useState(false);
   const corrDirtyRef = useRef(false);
   const corrForceRef = useRef(false);
-  const [corrFocusId, setCorrFocusId] = useState(SUPER_INVESTORS[0].id);
+  const [corrFocusId, setCorrFocusId] = useState(FUND_INVESTORS[0].id);
   const [overviewFilter, setOverviewFilter] = useState<"all" | "buy" | "sell">("all");
   const [overviewSort, setOverviewSort] = useState<"netDesc" | "netAsc" | "name">("netDesc");
 
@@ -828,12 +854,12 @@ export default function InstitutionsDashboard() {
     setCorrStarted(true);
     setCorr((prev) => {
       const next = { ...prev };
-      for (const item of SUPER_INVESTORS) {
+      for (const item of FUND_INVESTORS) {
         if (!next[item.id]) next[item.id] = { status: "loading" };
       }
       return next;
     });
-    const queue = SUPER_INVESTORS.map((item) => item.id).filter(
+    const queue = FUND_INVESTORS.map((item) => item.id).filter(
       (id) => corr[id]?.status !== "done",
     );
     const worker = async () => {
@@ -852,7 +878,7 @@ export default function InstitutionsDashboard() {
   useEffect(() => {
     if (tab !== "correlation" || !corrDirtyRef.current) return;
     const entries: Record<string, ReturnSeries> = {};
-    for (const item of SUPER_INVESTORS) {
+    for (const item of FUND_INVESTORS) {
       const entry = corr[item.id];
       if (entry?.status === "done" && entry.series) entries[item.id] = entry.series;
     }
@@ -955,10 +981,15 @@ export default function InstitutionsDashboard() {
     [topHoldings],
   );
   const maxTopWeight = topHoldings[0]?.weight ?? 0;
+  // 国会披露：没有持仓快照，只能展示交易与「买入 / 卖出」金额估算
+  const isCongress = filing?.source === "congress";
+  const congressLatest = filing?.quarters[0];
+  const congressBuyValue = congressLatest?.buysValue ?? 0;
+  const congressSellValue = congressLatest?.sellsValue ?? 0;
 
   const loadedFilings = useMemo(() => {
     const list: ThirteenFSummary[] = [];
-    for (const investor of SUPER_INVESTORS) {
+    for (const investor of FUND_INVESTORS) {
       const entry = overview[investor.id];
       if (entry?.status === "done" && entry.filing) list.push(entry.filing);
     }
@@ -1024,7 +1055,7 @@ export default function InstitutionsDashboard() {
     let buys = 0;
     let sells = 0;
     let net = 0;
-    for (const investor of SUPER_INVESTORS) {
+    for (const investor of FUND_INVESTORS) {
       const entry = overview[investor.id];
       if (entry?.status !== "done" || !entry.filing) continue;
       loaded += 1;
@@ -1040,7 +1071,7 @@ export default function InstitutionsDashboard() {
     return {
       loaded,
       filed,
-      total: SUPER_INVESTORS.length,
+      total: FUND_INVESTORS.length,
       buys,
       sells,
       net,
@@ -1049,7 +1080,7 @@ export default function InstitutionsDashboard() {
   }, [overview, overviewQuarter]);
 
   const topAggregatedChanges = useMemo(() => {
-    const entries = SUPER_INVESTORS.flatMap((investor) => {
+    const entries = FUND_INVESTORS.flatMap((investor) => {
       const entry = overview[investor.id];
       if (entry?.status !== "done" || !entry.filing) return [];
       return [{ investorId: investor.id, quarters: entry.filing.quarters }];
@@ -1064,7 +1095,7 @@ export default function InstitutionsDashboard() {
   const correlationModel = useMemo(() => {
     const seriesMap = new Map<string, Map<string, number>>();
     const quarterSet = new Set<string>();
-    for (const investor of SUPER_INVESTORS) {
+    for (const investor of FUND_INVESTORS) {
       const series = corr[investor.id]?.series;
       if (!series) continue;
       const points = new Map(series.points.map((point) => [point.quarter, point.returnPct]));
@@ -1073,10 +1104,10 @@ export default function InstitutionsDashboard() {
     }
 
     const matrix = new Map<string, Map<string, { r: number | null; n: number }>>();
-    for (const row of SUPER_INVESTORS) {
+    for (const row of FUND_INVESTORS) {
       const rowMap = new Map<string, { r: number | null; n: number }>();
       const rowPoints = seriesMap.get(row.id);
-      for (const col of SUPER_INVESTORS) {
+      for (const col of FUND_INVESTORS) {
         const colPoints = seriesMap.get(col.id);
         let r: number | null = null;
         let n = 0;
@@ -1100,10 +1131,10 @@ export default function InstitutionsDashboard() {
 
     const pairs: { a: (typeof SUPER_INVESTORS)[number]; b: (typeof SUPER_INVESTORS)[number]; r: number }[] = [];
     let sum = 0;
-    for (let i = 0; i < SUPER_INVESTORS.length; i += 1) {
-      for (let j = i + 1; j < SUPER_INVESTORS.length; j += 1) {
-        const a = SUPER_INVESTORS[i];
-        const b = SUPER_INVESTORS[j];
+    for (let i = 0; i < FUND_INVESTORS.length; i += 1) {
+      for (let j = i + 1; j < FUND_INVESTORS.length; j += 1) {
+        const a = FUND_INVESTORS[i];
+        const b = FUND_INVESTORS[j];
         const r = matrix.get(a.id)?.get(b.id)?.r;
         if (r === null || r === undefined) continue;
         pairs.push({ a, b, r });
@@ -1124,8 +1155,8 @@ export default function InstitutionsDashboard() {
     };
   }, [corr]);
 
-  const corrFocus = SUPER_INVESTORS.find((item) => item.id === corrFocusId) ?? SUPER_INVESTORS[0];
-  const corrFocusRanked = SUPER_INVESTORS.filter((item) => item.id !== corrFocus.id)
+  const corrFocus = FUND_INVESTORS.find((item) => item.id === corrFocusId) ?? FUND_INVESTORS[0];
+  const corrFocusRanked = FUND_INVESTORS.filter((item) => item.id !== corrFocus.id)
     .map((item) => {
       const cell = correlationModel.matrix.get(corrFocus.id)?.get(item.id);
       return cell && cell.r !== null ? { investor: item, r: cell.r, n: cell.n } : null;
@@ -1238,7 +1269,7 @@ export default function InstitutionsDashboard() {
                 >
                   <span className="num">{quarterLabel(item)}</span>
                   <span className="num ml-1 text-[9px] opacity-70">
-                    {quarterCoverage.get(item) ?? 0}/{SUPER_INVESTORS.length}
+                    {quarterCoverage.get(item) ?? 0}/{FUND_INVESTORS.length}
                   </span>
                 </button>
               ))}
@@ -1338,7 +1369,7 @@ export default function InstitutionsDashboard() {
             <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
               <Stat
                 label={t("已加载")}
-                value={`${correlationModel.loaded}/${SUPER_INVESTORS.length}`}
+                value={`${correlationModel.loaded}/${FUND_INVESTORS.length}`}
               />
               <Stat
                 label={t("样本季度")}
@@ -1394,7 +1425,7 @@ export default function InstitutionsDashboard() {
                   {t("刷新全部")}
                 </button>
               </div>
-              {correlationModel.loaded < SUPER_INVESTORS.length && (
+              {correlationModel.loaded < FUND_INVESTORS.length && (
                 <p className="w-full text-[9px] text-muted-foreground/70">
                   {t("首次加载约需 60-90 秒（SEC 限流），之后缓存 6 小时")}
                 </p>
@@ -1479,7 +1510,7 @@ export default function InstitutionsDashboard() {
                       <th className="sticky left-0 top-0 z-30 w-[92px] bg-card px-1.5 py-1 text-left text-[9px] font-medium text-muted-foreground">
                         {t("名人")}
                       </th>
-                      {SUPER_INVESTORS.map((item) => (
+                      {FUND_INVESTORS.map((item) => (
                         <th
                           key={item.id}
                           className="sticky top-0 z-20 h-[96px] w-[30px] bg-card p-0 align-bottom"
@@ -1505,7 +1536,7 @@ export default function InstitutionsDashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {SUPER_INVESTORS.map((row) => {
+                    {FUND_INVESTORS.map((row) => {
                       const rowCells = correlationModel.matrix.get(row.id);
                       return (
                         <tr key={row.id}>
@@ -1525,7 +1556,7 @@ export default function InstitutionsDashboard() {
                               {shortInvestorName(row.nameZh)}
                             </button>
                           </th>
-                          {SUPER_INVESTORS.map((col) => {
+                          {FUND_INVESTORS.map((col) => {
                             const cell = rowCells?.get(col.id);
                             const isSelf = row.id === col.id;
                             return (
@@ -1564,7 +1595,7 @@ export default function InstitutionsDashboard() {
                 aria-label={t("选择名人")}
                 className="ml-auto h-7 max-w-[220px] rounded-md border border-border bg-card px-2 text-[11px] text-foreground outline-none transition-colors focus:border-accent/60 focus:ring-2 focus:ring-accent/15"
               >
-                {SUPER_INVESTORS.map((item) => (
+                {FUND_INVESTORS.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.nameZh}
                   </option>
@@ -1685,21 +1716,46 @@ export default function InstitutionsDashboard() {
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
-                  <Stat label={t("总市值")} value={filing ? `$${formatCompact(filing.totalValue)}` : "--"} />
-                  <Stat
-                    label={t("持仓数")}
-                    value={filing ? String(filing.totalPositions) : "--"}
-                    hint={
-                      filing && filing.holdings.length < filing.totalPositions
-                        ? t("仅展示市值前 200 条")
-                        : undefined
-                    }
-                  />
-                  <Stat
-                    label={t("集中度")}
-                    value={filing ? formatPercent(concentration, 1).replace("+", "") : "--"}
-                    hint={t("前十大持仓")}
-                  />
+                  {isCongress ? (
+                    <>
+                      <Stat
+                        label={t("本期买入")}
+                        value={filing ? `$${formatCompact(congressBuyValue)}` : "--"}
+                        hint={t("按金额区间中值估算")}
+                      />
+                      <Stat
+                        label={t("本期卖出")}
+                        value={filing ? `$${formatCompact(congressSellValue)}` : "--"}
+                        hint={t("按金额区间中值估算")}
+                      />
+                      <Stat
+                        label={t("交易笔数")}
+                        value={filing ? String(filing.trades?.length ?? 0) : "--"}
+                        hint={t("最近几份 PTR")}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <Stat
+                        label={t("总市值")}
+                        value={filing ? `$${formatCompact(filing.totalValue)}` : "--"}
+                      />
+                      <Stat
+                        label={t("持仓数")}
+                        value={filing ? String(filing.totalPositions) : "--"}
+                        hint={
+                          filing && filing.holdings.length < filing.totalPositions
+                            ? t("仅展示市值前 200 条")
+                            : undefined
+                        }
+                      />
+                      <Stat
+                        label={t("集中度")}
+                        value={filing ? formatPercent(concentration, 1).replace("+", "") : "--"}
+                        hint={t("前十大持仓")}
+                      />
+                    </>
+                  )}
                   <button
                     type="button"
                     onClick={() => void loadFiling(investorId, true)}
@@ -1712,22 +1768,36 @@ export default function InstitutionsDashboard() {
               </div>
               <p className="flex flex-wrap items-center gap-2 border-t border-border bg-muted/30 px-4 py-1.5 text-[10px] text-muted-foreground">
                 <span className="rounded bg-card px-1.5 py-0.5 font-medium text-foreground/70">
-                  SEC 13F
+                  {isCongress ? t("国会披露 · PTR") : "SEC 13F"}
                 </span>
                 <span className="num">
-                  {filing ? `${t("报告期")} ${filing.period ?? filing.filedAt ?? "--"}` : "--"}
+                  {isCongress
+                    ? `${t("最新交易")} ${filing?.trades?.[0]?.tradeDate ?? "--"}`
+                    : filing
+                      ? `${t("报告期")} ${filing.period ?? filing.filedAt ?? "--"}`
+                      : "--"}
                 </span>
                 {filing?.filedAt && (
                   <span className="num text-muted-foreground/70">
                     {t("提交日")} {filing.filedAt}
                   </span>
                 )}
-                {filing && filing.holdings.length < filing.totalPositions && (
+                {isCongress ? (
                   <span className="text-muted-foreground/70">
-                    {t("仅展示市值前 200 条，总市值与占比按全量持仓计算")}
+                    {t("众议院 Clerk · STOCK Act 交易披露 · 无完整持仓")}
                   </span>
+                ) : (
+                  <>
+                    {filing && filing.holdings.length < filing.totalPositions && (
+                      <span className="text-muted-foreground/70">
+                        {t("仅展示市值前 200 条，总市值与占比按全量持仓计算")}
+                      </span>
+                    )}
+                    <span className="text-muted-foreground/70">
+                      {t("13F 为季度数据，通常滞后 45 天")}
+                    </span>
+                  </>
                 )}
-                <span className="text-muted-foreground/70">{t("13F 为季度数据，通常滞后 45 天")}</span>
               </p>
             </section>
 
@@ -1735,6 +1805,14 @@ export default function InstitutionsDashboard() {
               <ErrorCard message={filingError} onRetry={() => void loadFiling(investorId)} retry={t("重试")} />
             ) : (
               <>
+                {isCongress ? (
+                  <CongressTradesCard
+                    trades={filing?.trades ?? []}
+                    filings={filing?.filings ?? []}
+                    parsedFilings={filing?.parsedFilings}
+                    failedFilings={filing?.failedFilings}
+                  />
+                ) : (
                 <section className="overflow-hidden rounded-xl border border-border bg-card">
                   <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
                     <h2 className="text-[13px] font-medium">{t("前十大持仓")}</h2>
@@ -1793,12 +1871,15 @@ export default function InstitutionsDashboard() {
                     </ol>
                   )}
                 </section>
+                )}
 
                 <section className="overflow-hidden rounded-xl border border-border bg-card">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
                     <h2 className="text-[13px] font-medium">{t("近期调仓")}</h2>
                     <span className="text-[10px] text-muted-foreground">
-                      {t("最近 3 个季度 · 对比上季 13F · 按市值变动排序")}
+                      {isCongress
+                        ? t("按交易日期所在季度汇总 · 金额取区间中值")
+                        : t("最近 3 个季度 · 对比上季 13F · 按市值变动排序")}
                     </span>
                   </div>
                   {filingLoading && !filing ? (
@@ -1880,18 +1961,20 @@ export default function InstitutionsDashboard() {
                           </div>
                           <div className="mt-2 grid gap-2 md:grid-cols-2">
                             <ChangeList
-                              title={t("加仓")}
+                              title={isCongress ? t("买入") : t("加仓")}
                               tone="positive"
                               items={quarter.buys}
                               count={quarter.buysCount}
-                              empty={t("本季无加仓")}
+                              empty={isCongress ? t("本季无买入") : t("本季无加仓")}
+                              amountOnly={isCongress}
                             />
                             <ChangeList
-                              title={t("减仓")}
+                              title={isCongress ? t("卖出") : t("减仓")}
                               tone="negative"
                               items={quarter.sells}
                               count={quarter.sellsCount}
-                              empty={t("本季无减仓")}
+                              empty={isCongress ? t("本季无卖出") : t("本季无减仓")}
+                              amountOnly={isCongress}
                             />
                           </div>
                         </div>
@@ -1901,6 +1984,7 @@ export default function InstitutionsDashboard() {
                   )}
                 </section>
 
+                {!isCongress && (
                 <section className="overflow-hidden rounded-xl border border-border bg-card">
                   <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
                     <h2 className="text-[13px] font-medium">{t("持仓明细")}</h2>
@@ -2020,6 +2104,7 @@ export default function InstitutionsDashboard() {
                     </div>
                   )}
                 </section>
+                )}
               </>
             )}
           </div>

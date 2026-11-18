@@ -7,6 +7,7 @@ import {
   thirteenFCacheKey,
   type ThirteenFSummary,
 } from "@/lib/institutions";
+import { congressCacheKey, getCongressResult } from "@/lib/congress";
 import { dropCache } from "@/lib/cache";
 import { cacheHeaders, errorStatus, jsonError } from "@/lib/http";
 
@@ -32,6 +33,22 @@ export async function GET(request: NextRequest) {
   const investor = findInvestor(id);
   if (!investor) {
     return jsonError("未知的投资者，可选值见 /api/institutions/13f", 400, "invalid_request");
+  }
+
+  // 国会成员没有 13F，走众议院 Clerk 的 PTR（交易披露）
+  if (investor.source === "congress") {
+    if (refresh) dropCache(congressCacheKey(investor));
+    try {
+      const data = await getCongressResult(investor);
+      // 摘要只要最近几个披露文件，交易明细留在详情接口，避免总览把 29 份响应撑大
+      const payload = summary
+        ? { ...data, trades: undefined, filings: (data.filings ?? []).slice(0, 4) }
+        : data;
+      return Response.json(payload, { headers: cacheHeaders(21600, 86400) });
+    } catch (error) {
+      const { status, message, code } = errorStatus(error);
+      return jsonError(message, status, code);
+    }
   }
 
   if (refresh) dropCache(thirteenFCacheKey(investor));
