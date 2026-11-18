@@ -21,6 +21,10 @@ export async function GET(request: NextRequest) {
   if (!investor) {
     return jsonError("未知的投资者，可选值见 /api/institutions/13f", 400, "invalid_request");
   }
+  // 相关性用 13F 的相邻季度持仓反推收益；国会成员只有 PTR 交易，没有持仓快照
+  if (investor.source === "congress") {
+    return jsonError("国会披露（PTR）没有季度持仓，无法计算组合收益相关性", 400, "invalid_request");
+  }
 
   const rawQuarters = Number(request.nextUrl.searchParams.get("quarters") ?? 8);
   const quarters = Number.isFinite(rawQuarters)
