@@ -16,6 +16,8 @@ import {
   parseInformationTable,
   pearsonCorrelation,
   recent13FFilings,
+  QUARTER_CHANGES_SUMMARY_LIMIT,
+  TOP_CHANGES_LIMIT,
   type PositionChange,
   type QuarterChange,
 } from "@/lib/institutions";
@@ -636,6 +638,34 @@ test("aggregateTopChangesForQuarter：不把其它季度的调仓混进所选季
   assert.equal(q2[0].institutions, 2);
 
   assert.deepEqual(aggregateTopChangesForQuarter(entries, "2025-12-31", "buy", 5), []);
+});
+
+test("加仓 / 减仓榜单默认取前 10 条，总览明细上限足以聚合 Top 10", () => {
+  const buys = Array.from({ length: 15 }, (_, index) =>
+    position(`BUY ${index}`, 15000 - index * 1000, "new"),
+  );
+  const sells = Array.from({ length: 12 }, (_, index) =>
+    position(`SELL ${index}`, 12000 - index * 500, "exit"),
+  );
+  const entries = [{ investorId: "a", quarters: [qc("2026-09-30", 0, 0, buys, sells)] }];
+
+  assert.equal(TOP_CHANGES_LIMIT, 10);
+  // summary=1 每季保留的明细必须多于榜单条数，否则跨机构合计金额会偏低
+  assert.ok(QUARTER_CHANGES_SUMMARY_LIMIT > TOP_CHANGES_LIMIT);
+
+  const topBuys = aggregateTopChangesForQuarter(entries, "2026-09-30", "buy");
+  assert.equal(topBuys.length, 10);
+  assert.equal(topBuys[0].issuer, "BUY 0");
+  assert.equal(topBuys[9].issuer, "BUY 9");
+
+  const topSells = aggregateTopChangesForQuarter(entries, "2026-09-30", "sell");
+  assert.equal(topSells.length, 10);
+  assert.equal(topSells[0].issuer, "SELL 0");
+  assert.equal(topSells[9].issuer, "SELL 9");
+
+  // 显式 limit 仍然生效（旧调用方不会被默认值影响）
+  assert.equal(aggregateTopChangesForQuarter(entries, "2026-09-30", "buy", 3).length, 3);
+  assert.equal(aggregateTopChanges([{ investorId: "a", quarter: entries[0].quarters[0] }], "buy").length, 10);
 });
 
 test("dropCache：显式刷新后重新执行 loader", async () => {
