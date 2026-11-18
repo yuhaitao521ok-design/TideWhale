@@ -26,7 +26,12 @@ export async function GET(request: NextRequest) {
       const data = await loadChart(symbol, range, "1d");
       return {
         symbol,
-        points: data.points.map((point) => ({ t: point.t, close: point.close })),
+        points: data.points.map((point) => ({
+          t: point.t,
+          close: point.close,
+          // 研究页用复权价算收益；Nasdaq 兜底没有该字段，前端回退到 close
+          adjClose: point.adjClose ?? null,
+        })),
       };
     }),
   );

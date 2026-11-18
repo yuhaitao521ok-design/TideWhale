@@ -615,6 +615,12 @@ export function returnHistogram(
 /*                          相对基准：alpha / beta                              */
 /* -------------------------------------------------------------------------- */
 
+/** 复权收盘价：有 adjClose 时优先（拆股 / 分红不产生假收益），缺失时退回原始 close */
+export function adjustedClose(point: { close: number; adjClose?: number | null }): number {
+  const value = point.adjClose;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : point.close;
+}
+
 export interface TimedReturn {
   /** 秒级时间戳（对齐用） */
   t: number;

@@ -18,6 +18,7 @@ import type { ResearchRow, ResearchSortKey } from "@/components/research/types";
 import { formatNumber, formatPercent } from "@/lib/format";
 import { useI18n } from "@/lib/i18n";
 import {
+  adjustedClose,
   alphaBeta,
   dailyReturns,
   drawdownSeries,
@@ -37,7 +38,7 @@ const RANGES: RangeKey[] = ["3M", "6M", "1Y", "5Y"];
 /** 单次批量请求的标的数（接口上限 16，留点余量） */
 const CHUNK_SIZE = 8;
 
-type ClosePoint = { t: number; close: number };
+type ClosePoint = { t: number; close: number; adjClose?: number | null };
 
 const EMPTY_ALPHA_BETA: AlphaBeta = {
   beta: null,
@@ -50,15 +51,22 @@ const EMPTY_ALPHA_BETA: AlphaBeta = {
   samples: 0,
 };
 
+/**
+ * 研究页的点位：优先用复权收盘价，拆股 / 分红不会在收益里制造假跳空。
+ * Nasdaq 兜底没有复权数据时退回原始 close（相关指标会受拆股影响）。
+ */
 function toChartPoints(points: ClosePoint[]): ChartPoint[] {
-  return points.map((point) => ({
-    t: point.t,
-    open: point.close,
-    high: point.close,
-    low: point.close,
-    close: point.close,
-    volume: null,
-  }));
+  return points.map((point) => {
+    const close = adjustedClose(point);
+    return {
+      t: point.t,
+      open: close,
+      high: close,
+      low: close,
+      close,
+      volume: null,
+    };
+  });
 }
 
 function normalizeSymbol(value: string): string {
@@ -671,6 +679,11 @@ export default function ResearchDashboard() {
           <p className="text-[10.5px] text-muted-foreground">
             {t(
               "所有指标都在浏览器本地计算：日线收盘价按所选区间取数，夏普 / 索提诺 / 下行波动按 252 交易日年化，Alpha / Beta 以 SPY 为基准；数据只在切换标的池或区间时请求，且按区间缓存。",
+            )}
+          </p>
+          <p className="text-[10.5px] text-muted-foreground">
+            {t(
+              "收益按复权收盘价计算（Yahoo 提供）；Nasdaq 兜底没有复权数据，遇到拆股 / 分红会与复权口径有差异。",
             )}
           </p>
         </div>

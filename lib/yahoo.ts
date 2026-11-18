@@ -118,13 +118,16 @@ interface YahooMeta {
   exchangeTimezoneName?: string;
 }
 
-interface YahooIndicators {
+export interface YahooIndicators {
   quote?: Array<{
     open?: (number | null)[];
     high?: (number | null)[];
     low?: (number | null)[];
     close?: (number | null)[];
     volume?: (number | null)[];
+  }>;
+  adjclose?: Array<{
+    adjclose?: (number | null)[];
   }>;
 }
 
@@ -208,10 +211,15 @@ function sparklineFrom(result: { timestamp?: number[]; indicators: YahooIndicato
   return closes.filter((n): n is number => typeof n === "number" && Number.isFinite(n));
 }
 
-function chartPointsFrom(result: YahooChartResult): ChartPoint[] {
+/** 把 Yahoo chart 结果转成统一点位；导出以便单测解析（含 adjclose 对齐） */
+export function chartPointsFrom(result: {
+  timestamp?: number[];
+  indicators: YahooIndicators;
+}): ChartPoint[] {
   const timestamps = result.timestamp ?? [];
   const quote = result.indicators.quote?.[0];
   const closes = quote?.close ?? [];
+  const adjusted = result.indicators.adjclose?.[0]?.adjclose ?? [];
   const points: ChartPoint[] = [];
 
   for (let i = 0; i < timestamps.length; i += 1) {
@@ -223,6 +231,7 @@ function chartPointsFrom(result: YahooChartResult): ChartPoint[] {
       high: pickNumber(quote?.high?.[i]),
       low: pickNumber(quote?.low?.[i]),
       close,
+      adjClose: pickNumber(adjusted[i]),
       volume: pickNumber(quote?.volume?.[i]),
     });
   }

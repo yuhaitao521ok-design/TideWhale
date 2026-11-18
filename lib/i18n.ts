@@ -825,6 +825,7 @@ const ZH_HANT: Record<string, string> = {
   "平均相关性用 Fisher z 计算，只统计样本达标的配对": "平均相關性用 Fisher z 計算，只統計樣本達標的配對",
   "样本 ≥ 20 个交易日的配对才计入": "樣本 ≥ 20 個交易日的配對才計入",
   "样本 ≥ 20 个交易日的配对才计入；平均相关性用 Fisher z；悬停单元格可看共同交易日数。": "樣本 ≥ 20 個交易日的配對才計入；平均相關性用 Fisher z；懸停儲存格可看共同交易日數。",
+  "收益按复权收盘价计算（Yahoo 提供）；Nasdaq 兜底没有复权数据，遇到拆股 / 分红会与复权口径有差异。": "收益按復權收盤價計算（Yahoo 提供）；Nasdaq 兜底沒有復權資料，遇到拆股 / 分紅會與復權口徑有差異。",
 };
 
 /** 英文词典（key 为简体原文） */
@@ -1622,6 +1623,7 @@ const EN: Record<string, string> = {
   "平均相关性用 Fisher z 计算，只统计样本达标的配对": "Average correlation uses the Fisher z transform and only counts pairs with enough samples",
   "样本 ≥ 20 个交易日的配对才计入": "Only pairs with at least 20 common trading days are counted",
   "样本 ≥ 20 个交易日的配对才计入；平均相关性用 Fisher z；悬停单元格可看共同交易日数。": "Only pairs with at least 20 common trading days are counted; average correlation uses Fisher z; hover a cell to see the number of common trading days.",
+  "收益按复权收盘价计算（Yahoo 提供）；Nasdaq 兜底没有复权数据，遇到拆股 / 分红会与复权口径有差异。": "Returns use split/dividend-adjusted closes when Yahoo provides them; the Nasdaq fallback has no adjusted series, so splits and dividends can shift those metrics.",
 };
 
 const DICTIONARIES: Record<Locale, Record<string, string>> = {
