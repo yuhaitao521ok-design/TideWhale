@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import {
+  QUARTER_CHANGES_SUMMARY_LIMIT,
   SUPER_INVESTORS,
   findInvestor,
   get13F,
@@ -45,12 +46,12 @@ export async function GET(request: NextRequest) {
         period: data.period,
         totalPositions: data.totalPositions,
         totalValue: data.totalValue,
-        // 总览需要按季度切换：每季保留加仓 / 减仓前 10 条（卡片只展示第 1 条，
-        // 跨机构 Top 5 由这些明细聚合），既够用又不把 29 人的响应撑大。
+        // 总览需要按季度切换：每季保留加仓 / 减仓前 20 条（卡片只展示第 1 条，
+        // 跨机构 Top 10 由这些明细聚合），既够用又不把 29 人的响应撑大。
         quarters: data.quarters.map((quarter) => ({
           ...quarter,
-          buys: quarter.buys.slice(0, 10),
-          sells: quarter.sells.slice(0, 10),
+          buys: quarter.buys.slice(0, QUARTER_CHANGES_SUMMARY_LIMIT),
+          sells: quarter.sells.slice(0, QUARTER_CHANGES_SUMMARY_LIMIT),
         })),
         fetchedAt: data.fetchedAt,
       };

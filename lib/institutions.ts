@@ -440,6 +440,16 @@ export function estimatePositionTradeValue(change: PositionChange): number {
   return Math.abs(change.valueChange ?? 0);
 }
 
+/** 加仓 / 减仓榜单默认条数（跨机构榜与名人详情「近期调仓」共用） */
+export const TOP_CHANGES_LIMIT = 10;
+
+/**
+ * 总览接口每个季度保留的调仓明细条数。
+ * 必须大于 TOP_CHANGES_LIMIT：跨机构 Top 10 由各位名人的明细聚合而成，
+ * 只留 10 条会让「某机构排第 11 的加仓」缺席，合计金额偏低。
+ */
+export const QUARTER_CHANGES_SUMMARY_LIMIT = 20;
+
 export interface AggregatedChange {
   cusip: string;
   issuer: string;
@@ -455,7 +465,7 @@ export interface AggregatedChange {
 export function aggregateTopChanges(
   entries: { investorId: string; quarter: QuarterChange }[],
   side: "buy" | "sell",
-  limit = 5,
+  limit = TOP_CHANGES_LIMIT,
 ): AggregatedChange[] {
   const merged = new Map<
     string,
@@ -540,7 +550,7 @@ export function aggregateTopChangesForQuarter(
   entries: { investorId: string; quarters: QuarterChange[] }[],
   period: string,
   side: "buy" | "sell",
-  limit = 5,
+  limit = TOP_CHANGES_LIMIT,
 ): AggregatedChange[] {
   const scoped = entries.flatMap(({ investorId, quarters }) => {
     const quarter = findQuarterChange(quarters, period);

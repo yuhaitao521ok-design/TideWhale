@@ -6,6 +6,7 @@ import { useI18n } from "@/lib/i18n";
 import { formatCompact, formatNumber, formatPercent } from "@/lib/format";
 import {
   SUPER_INVESTORS,
+  TOP_CHANGES_LIMIT,
   aggregateTopChangesForQuarter,
   collectReportQuarters,
   countQuarterCoverage,
@@ -38,7 +39,9 @@ interface CorrelationEntry {
 }
 
 const SYMBOL_RE = /^[A-Z0-9.^=-]{1,12}$/;
-const OVERVIEW_CACHE_KEY = "institutions:overview:v1";
+// v2：每季明细从 10 条扩到 20 条（加仓 / 减仓榜单改为 Top 10），
+// 旧缓存的明细不够聚合 Top 10，换 key 强制重拉一次。
+const OVERVIEW_CACHE_KEY = "institutions:overview:v2";
 const CORR_CACHE_KEY = "institutions:correlation:v1";
 const OVERVIEW_CACHE_TTL = 6 * 60 * 60 * 1000;
 
@@ -147,7 +150,7 @@ function ChangeList({
         <p className="mt-1 text-[10px] text-muted-foreground">{empty}</p>
       ) : (
         <ul className="mt-1.5 space-y-1">
-          {items.slice(0, 5).map((item) => (
+          {items.slice(0, TOP_CHANGES_LIMIT).map((item) => (
             <li
               key={`${item.cusip}-${item.putCall ?? ""}`}
               className="flex items-baseline justify-between gap-2"
@@ -503,7 +506,7 @@ function AggregatedChangeList({
       </div>
       {loading ? (
         <div className="space-y-1.5 p-3">
-          {Array.from({ length: 5 }).map((_, index) => (
+          {Array.from({ length: TOP_CHANGES_LIMIT }).map((_, index) => (
             <div key={index} className="skeleton h-6 rounded-md" />
           ))}
         </div>
@@ -1053,8 +1056,8 @@ export default function InstitutionsDashboard() {
     });
     if (!overviewQuarter) return { buys: [], sells: [] };
     return {
-      buys: aggregateTopChangesForQuarter(entries, overviewQuarter, "buy", 5),
-      sells: aggregateTopChangesForQuarter(entries, overviewQuarter, "sell", 5),
+      buys: aggregateTopChangesForQuarter(entries, overviewQuarter, "buy", TOP_CHANGES_LIMIT),
+      sells: aggregateTopChangesForQuarter(entries, overviewQuarter, "sell", TOP_CHANGES_LIMIT),
     };
   }, [overview, overviewQuarter]);
 
@@ -1247,13 +1250,13 @@ export default function InstitutionsDashboard() {
 
           <section className="grid gap-3 lg:grid-cols-2">
             <AggregatedChangeList
-              title={t("机构加仓 Top 5")}
+              title={t("机构加仓 Top 10")}
               tone="positive"
               items={topAggregatedChanges.buys}
               loading={overviewStats.loaded === 0}
             />
             <AggregatedChangeList
-              title={t("机构减仓 Top 5")}
+              title={t("机构减仓 Top 10")}
               tone="negative"
               items={topAggregatedChanges.sells}
               loading={overviewStats.loaded === 0}
