@@ -820,6 +820,11 @@ const ZH_HANT: Record<string, string> = {
   "仓位加权（含现金）": "倉位加權（含現金）",
   "仓位在标的库分配，未分配部分按现金（收益 0%）计；回撤与夏普无法由单只结果加权": "倉位在標的庫分配，未分配部分按現金（收益 0%）計；回撤與夏普無法由單只結果加權",
   "Σ(仓位 × 单只收益) + 现金 × 0%；回撤与夏普无法由单只结果加权": "Σ(倉位 × 單只收益) + 現金 × 0%；回撤與夏普無法由單只結果加權",
+  "有效配对": "有效配對",
+  "样本": "樣本",
+  "平均相关性用 Fisher z 计算，只统计样本达标的配对": "平均相關性用 Fisher z 計算，只統計樣本達標的配對",
+  "样本 ≥ 20 个交易日的配对才计入": "樣本 ≥ 20 個交易日的配對才計入",
+  "样本 ≥ 20 个交易日的配对才计入；平均相关性用 Fisher z；悬停单元格可看共同交易日数。": "樣本 ≥ 20 個交易日的配對才計入；平均相關性用 Fisher z；懸停儲存格可看共同交易日數。",
 };
 
 /** 英文词典（key 为简体原文） */
@@ -1612,6 +1617,11 @@ const EN: Record<string, string> = {
   "仓位加权（含现金）": "Weighted (incl. cash)",
   "仓位在标的库分配，未分配部分按现金（收益 0%）计；回撤与夏普无法由单只结果加权": "Weights are allocated in the symbol library; unassigned capital is cash (0% return). Drawdown and Sharpe cannot be aggregated from single-name results.",
   "Σ(仓位 × 单只收益) + 现金 × 0%；回撤与夏普无法由单只结果加权": "Σ(weight × single-name return) + cash × 0%; drawdown and Sharpe cannot be aggregated from single-name results",
+  "有效配对": "Valid pairs",
+  "样本": "Samples",
+  "平均相关性用 Fisher z 计算，只统计样本达标的配对": "Average correlation uses the Fisher z transform and only counts pairs with enough samples",
+  "样本 ≥ 20 个交易日的配对才计入": "Only pairs with at least 20 common trading days are counted",
+  "样本 ≥ 20 个交易日的配对才计入；平均相关性用 Fisher z；悬停单元格可看共同交易日数。": "Only pairs with at least 20 common trading days are counted; average correlation uses Fisher z; hover a cell to see the number of common trading days.",
 };
 
 const DICTIONARIES: Record<Locale, Record<string, string>> = {

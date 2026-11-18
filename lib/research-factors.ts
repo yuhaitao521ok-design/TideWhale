@@ -540,9 +540,9 @@ export const FACTOR_DOCS: FactorDoc[] = [
       en: "Above 0.8 moves almost in lockstep — holding both is doubling the same bet; 0.3–0.6 gives some diversification; near 0 or negative is strongest. Correlation drifts over time (it rises in crises), so one window is only a snapshot.",
     },
     formula: {
-      zh: "cov(a, b) / (σa × σb)，按共同交易日对齐",
-      hant: "cov(a, b) / (σa × σb)，按共同交易日對齊",
-      en: "cov(a, b) / (σa × σb) on common trading days",
+      zh: "cov(a, b) / (σa × σb)，按共同交易日对齐；共同交易日 < 20 个不显示",
+      hant: "cov(a, b) / (σa × σb)，按共同交易日對齊；共同交易日 < 20 個不顯示",
+      en: "cov(a, b) / (σa × σb) on common trading days; pairs with fewer than 20 common days are hidden",
     },
   },
   {
@@ -550,9 +550,9 @@ export const FACTOR_DOCS: FactorDoc[] = [
     group: "correlation",
     label: { zh: "平均相关性", hant: "平均相關性", en: "Average correlation" },
     what: {
-      zh: "标的池内所有两两相关系数的平均值。",
-      hant: "標的池內所有兩兩相關係數的平均值。",
-      en: "Mean of every pairwise correlation inside the pool.",
+      zh: "标的池内所有两两相关系数的平均值（Fisher z 平均，只统计样本达标的配对）。",
+      hant: "標的池內所有兩兩相關係數的平均值（Fisher z 平均，只統計樣本達標的配對）。",
+      en: "Average of every pairwise correlation in the pool (Fisher z mean over pairs with enough samples).",
     },
     how: {
       zh: "<0.3 分散效果好，0.3–0.6 中等，>0.7 基本是同一波行情——组合的「分散」只是心理安慰，遇到系统性下跌会一起跌。加标的时优先选能把这个数字拉低的那只。",
@@ -560,9 +560,9 @@ export const FACTOR_DOCS: FactorDoc[] = [
       en: "Below 0.3 is well diversified, 0.3–0.6 is medium, above 0.7 means one single trade — the 'diversification' is psychological and a systemic selloff hits everything together. When adding names, pick the one that pulls this number down.",
     },
     formula: {
-      zh: "mean(所有 i<j 的相关系数)",
-      hant: "mean(所有 i<j 的相關係數)",
-      en: "mean of all i<j correlations",
+      zh: "tanh(mean(atanh(r)))，只含共同交易日 ≥ 20 的配对",
+      hant: "tanh(mean(atanh(r)))，只含共同交易日 ≥ 20 的配對",
+      en: "tanh(mean(atanh(r))) over pairs with at least 20 common trading days",
     },
   },
   {
@@ -628,9 +628,14 @@ export const CORRELATION_NOTES: LocalizedText[] = [
     en: "The matrix is symmetric — read the upper triangle only. Values are aligned on common trading days, so different market holidays will not misalign them.",
   },
   {
-    zh: "「按相关聚类」会把相似的标的排在一起，热力图出现块状就说明这几只是同一波行情。",
-    hant: "「按相關聚類」會把相似的標的排在一起，熱力圖出現塊狀就說明這幾隻是同一波行情。",
-    en: "'Cluster order' groups similar names together; blocks in the heatmap mean those names are one single trade.",
+    zh: "共同交易日少于 20 个的配对不显示（--）：3M 区间约 63 天，r≈0.6 的 95% 置信区间仍有 ±0.16，别把 0.55 和 0.60 当成差别。",
+    hant: "共同交易日少於 20 個的配對不顯示（--）：3M 區間約 63 天，r≈0.6 的 95% 置信區間仍有 ±0.16，別把 0.55 和 0.60 當成差別。",
+    en: "Pairs with fewer than 20 common days show as --. Even with ~63 days (3M), the 95% interval around r≈0.6 is ±0.16 — don't treat 0.55 and 0.60 as different.",
+  },
+  {
+    zh: "「按相关聚类」用 average-linkage 层次聚类 + 最优叶序，把相似的标的排在一起；热力图出现块状就说明这几只是同一波行情。",
+    hant: "「按相關聚類」用 average-linkage 層次聚類 + 最優葉序，把相似的標的排在一起；熱力圖出現塊狀就說明這幾隻是同一波行情。",
+    en: "'Cluster order' uses average-linkage hierarchical clustering with optimal leaf ordering. Blocks in the heatmap mean those names are one single trade.",
   },
   {
     zh: "标的池可以随时加/减，数量没有上限；矩阵越大加载越慢，建议一次研究 10–30 只。",

@@ -39,6 +39,9 @@ export interface RiskMetrics {
 
 const TRADING_DAYS = 252;
 
+/** 相关性最小样本数：不足 20 个共同交易日的配对噪声过大，直接不展示 */
+export const MIN_CORRELATION_SAMPLES = 20;
+
 /** 日收益率序列（小数） */
 export function dailyReturns(points: ChartPoint[]): number[] {
   const returns: number[] = [];
@@ -468,46 +471,109 @@ export function trendStructure(points: ChartPoint[]): TrendStructure {
 }
 
 /**
- * 相关矩阵的「聚类排序」：从最相关的一对出发，每次把与已排列表平均相关性最高的标的接上，
- * 让相似资产挨在一起，热力图会呈现明显的块状结构。
+ * 相关矩阵的「聚类排序」：average-linkage 层次聚类 + 最优叶序。
+ * - 距离 = 1 − 相关系数；缺失值（样本不足）用该行有效相关性中位数代替，不当作 0
+ * - 合并后按「子节点边界相关性最大」决定左右方向，让相似资产连续成块
  */
 export function seriateCorrelation(matrix: (number | null)[][]): number[] {
   const size = matrix.length;
   if (size === 0) return [];
   if (size === 1) return [0];
 
-  const value = (a: number, b: number): number => {
+  const value = (a: number, b: number): number | null => {
     const candidate = matrix[a]?.[b];
-    return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : 0;
+    return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : null;
   };
 
-  let best: [number, number] = [0, 1];
-  let bestValue = Number.NEGATIVE_INFINITY;
-  for (let a = 0; a < size; a += 1) {
-    for (let b = a + 1; b < size; b += 1) {
-      const candidate = matrix[a]?.[b];
-      if (typeof candidate !== "number" || !Number.isFinite(candidate)) continue;
-      if (candidate > bestValue) {
-        bestValue = candidate;
-        best = [a, b];
-      }
+  // 缺失值用该行有效相关性中位数填充：混合数据源 / 新上市标的不会被当成「完全不相关」
+  const fallback = Array.from({ length: size }, (_, row) => {
+    const values: number[] = [];
+    for (let column = 0; column < size; column += 1) {
+      if (column === row) continue;
+      const candidate = value(row, column);
+      if (candidate !== null) values.push(candidate);
     }
+    if (values.length === 0) return 0;
+    values.sort((x, y) => x - y);
+    const middle = Math.floor(values.length / 2);
+    return values.length % 2 === 0
+      ? (values[middle - 1] + values[middle]) / 2
+      : values[middle];
+  });
+
+  const similarity = (a: number, b: number): number => {
+    if (a === b) return 1;
+    const candidate = value(a, b) ?? value(b, a);
+    return candidate ?? (fallback[a] + fallback[b]) / 2;
+  };
+
+  interface Cluster {
+    members: number[];
+    left?: Cluster;
+    right?: Cluster;
   }
 
-  const order = [...new Set(best)];
-  while (order.length < size) {
-    let next = -1;
-    let nextScore = Number.NEGATIVE_INFINITY;
-    for (let index = 0; index < size; index += 1) {
-      if (order.includes(index)) continue;
-      const score = order.reduce((sum, placed) => sum + value(index, placed), 0) / order.length;
-      if (score > nextScore) {
-        nextScore = score;
-        next = index;
+  let clusters: Cluster[] = Array.from({ length: size }, (_, index) => ({ members: [index] }));
+
+  while (clusters.length > 1) {
+    let bestA = 0;
+    let bestB = 1;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    for (let a = 0; a < clusters.length; a += 1) {
+      for (let b = a + 1; b < clusters.length; b += 1) {
+        let total = 0;
+        for (const left of clusters[a].members) {
+          for (const right of clusters[b].members) total += 1 - similarity(left, right);
+        }
+        const distance = total / (clusters[a].members.length * clusters[b].members.length);
+        if (distance < bestDistance - 1e-12) {
+          bestDistance = distance;
+          bestA = a;
+          bestB = b;
+        }
       }
     }
-    if (next < 0) break;
-    order.push(next);
+
+    const merged: Cluster = {
+      members: [...clusters[bestA].members, ...clusters[bestB].members].sort((x, y) => x - y),
+      left: clusters[bestA],
+      right: clusters[bestB],
+    };
+    clusters = clusters.filter((_, index) => index !== bestA && index !== bestB);
+    clusters.push(merged);
+  }
+
+  /** 递归输出叶子顺序：左右子树各有两种方向，取边界相关性最大的组合 */
+  const orderLeaves = (cluster: Cluster): number[] => {
+    if (!cluster.left || !cluster.right) return cluster.members;
+    const left = orderLeaves(cluster.left);
+    const right = orderLeaves(cluster.right);
+    const split = left.length;
+    const candidates = [
+      [...left, ...right],
+      [...left].reverse().concat(right),
+      left.concat([...right].reverse()),
+      [...left].reverse().concat([...right].reverse()),
+    ];
+
+    let best = candidates[0];
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (const candidate of candidates) {
+      const score = similarity(candidate[split - 1], candidate[split]);
+      if (score > bestScore + 1e-12) {
+        bestScore = score;
+        best = candidate;
+      }
+    }
+    return best;
+  };
+
+  const order = orderLeaves(clusters[0]);
+  // 防御：极端输入下也返回 0..size-1 的完整排列
+  const seen = new Set(order);
+  for (let index = 0; index < size; index += 1) {
+    if (!seen.has(index)) order.push(index);
   }
   return order;
 }
@@ -707,10 +773,10 @@ export function alphaBeta(stock: TimedReturn[], benchmark: TimedReturn[]): Alpha
   };
 }
 
-/** 按时间戳对齐的两只标的的相关系数 */
+/** 按交易日对齐的两只标的的相关系数（样本不足 20 个交易日返回 null） */
 export function correlationByTime(a: TimedReturn[], b: TimedReturn[]): number | null {
   const aligned = alignReturns(a, b);
-  if (aligned.a.length < 8) return null;
+  if (aligned.a.length < MIN_CORRELATION_SAMPLES) return null;
   const value = correlation(aligned.a, aligned.b);
   return value === null ? null : Number(value.toFixed(3));
 }
@@ -739,14 +805,32 @@ export function pairwiseCorrelations(
   return output;
 }
 
-/** 标的池的平均两两相关性（越接近 1 越像同一只股票） */
+/**
+ * Fisher z 平均：tanh(mean(atanh(r)))。
+ * 相关系数不在线性尺度上，算术平均会低估 |r|，求平均时应先做 z 变换。
+ */
+export function fisherAverageCorrelation(values: number[]): number | null {
+  const usable = values.filter((value) => Number.isFinite(value));
+  if (usable.length === 0) return null;
+  const z =
+    usable.reduce(
+      (sum, value) => sum + Math.atanh(Math.max(-0.9999, Math.min(0.9999, value))),
+      0,
+    ) / usable.length;
+  return Number(Math.tanh(z).toFixed(3));
+}
+
+/**
+ * 标的池的平均两两相关性（越接近 1 越像同一只股票）。
+ * - 只统计样本达标的配对（≥ MIN_CORRELATION_SAMPLES）
+ * - 用 Fisher z 平均（tanh(mean(atanh(r)))），避免算术平均低估 |r|
+ */
 export function averageCorrelation(series: TimedSeries[]): number | null {
   const pairs = pairwiseCorrelations(series).filter(
-    (pair): pair is { a: string; b: string; value: number; samples: number } => pair.value !== null,
+    (pair): pair is { a: string; b: string; value: number; samples: number } =>
+      pair.value !== null && pair.samples >= MIN_CORRELATION_SAMPLES,
   );
-  if (pairs.length === 0) return null;
-  const total = pairs.reduce((sum, pair) => sum + pair.value, 0);
-  return Number((total / pairs.length).toFixed(3));
+  return fisherAverageCorrelation(pairs.map((pair) => pair.value));
 }
 
 /**

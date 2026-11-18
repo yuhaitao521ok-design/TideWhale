@@ -7,9 +7,10 @@ import type { ResearchRow } from "@/components/research/types";
 import { formatNumber } from "@/lib/format";
 import { useI18n } from "@/lib/i18n";
 import {
-  averageCorrelation,
-  correlationByTime,
-  pairwiseCorrelations,
+  MIN_CORRELATION_SAMPLES,
+  alignReturns,
+  correlation,
+  fisherAverageCorrelation,
   seriateCorrelation,
 } from "@/lib/quant";
 
@@ -29,11 +30,14 @@ interface CorrelationMatrixProps {
 function cellColor(value: number | null): string {
   if (value === null) return "var(--muted)";
   const magnitude = Math.min(1, Math.abs(value));
+  // 0 附近保持中性，避免「几乎不相关」也被涂成浅红/浅绿
+  if (magnitude < 0.1) return "var(--muted)";
   const base = value >= 0 ? "var(--positive)" : "var(--negative)";
-  return `color-mix(in srgb, ${base} ${Math.round(16 + magnitude * 68)}%, transparent)`;
+  const strength = Math.round(16 + ((magnitude - 0.1) / 0.9) * 68);
+  return `color-mix(in srgb, ${base} ${strength}%, transparent)`;
 }
 
-type Pair = { a: string; b: string; value: number | null; samples: number };
+type Pair = { i: number; j: number; value: number; samples: number };
 
 /** 相关性矩阵：标的自由增删、按相关聚类排序、可导出 CSV */
 export default function CorrelationMatrix({
@@ -50,15 +54,35 @@ export default function CorrelationMatrix({
   const { t } = useI18n();
   const [orderBy, setOrderBy] = useState<"cluster" | "symbol">("cluster");
 
-  const matrix = useMemo(
-    () =>
-      rows.map((rowA) =>
-        rows.map((rowB) =>
-          rowA.symbol === rowB.symbol ? 1 : correlationByTime(rowA.timed, rowB.timed),
-        ),
-      ),
-    [rows],
-  );
+  /**
+   * 一次性算出 i<j 的配对（相关系数 + 共同交易日数），矩阵对称填充，统计复用同一份结果。
+   * 样本不足 MIN_CORRELATION_SAMPLES 的配对返回 null（界面显示 --）。
+   */
+  const grid = useMemo(() => {
+    const count = rows.length;
+    const values: (number | null)[][] = Array.from({ length: count }, () =>
+      Array<number | null>(count).fill(null),
+    );
+    const samples: number[][] = Array.from({ length: count }, () => Array<number>(count).fill(0));
+
+    for (let i = 0; i < count; i += 1) {
+      values[i][i] = 1;
+      samples[i][i] = rows[i].timed.length;
+      for (let j = i + 1; j < count; j += 1) {
+        const aligned = alignReturns(rows[i].timed, rows[j].timed);
+        const value =
+          aligned.a.length >= MIN_CORRELATION_SAMPLES ? correlation(aligned.a, aligned.b) : null;
+        const rounded = value === null ? null : Number(value.toFixed(3));
+        values[i][j] = rounded;
+        values[j][i] = rounded;
+        samples[i][j] = aligned.a.length;
+        samples[j][i] = aligned.a.length;
+      }
+    }
+    return { values, samples };
+  }, [rows]);
+
+  const matrix = grid.values;
 
   const indexOrder = useMemo(() => {
     if (orderBy === "symbol") return rows.map((_, index) => index);
@@ -66,22 +90,42 @@ export default function CorrelationMatrix({
   }, [orderBy, rows, matrix]);
 
   const stats = useMemo(() => {
-    const series = rows.map((row) => ({ symbol: row.symbol, returns: row.timed }));
-    const pairs = pairwiseCorrelations(series).filter(
-      (pair): pair is Pair & { value: number } => pair.value !== null,
-    );
-    if (pairs.length === 0) {
-      return { average: null as number | null, best: null as Pair | null, worst: null as Pair | null };
+    const pairs: Pair[] = [];
+    let total = 0;
+    for (let i = 0; i < rows.length; i += 1) {
+      for (let j = i + 1; j < rows.length; j += 1) {
+        total += 1;
+        const value = matrix[i]?.[j];
+        if (value === null || value === undefined) continue;
+        pairs.push({ i, j, value, samples: grid.samples[i][j] });
+      }
     }
-    const sorted = [...pairs].sort((a, b) => b.value - a.value);
-    return {
-      average: averageCorrelation(series),
-      best: sorted[0] as Pair,
-      worst: sorted[sorted.length - 1] as Pair,
-    };
-  }, [rows]);
 
-  const diversity = stats.average === null ? null : Math.max(0, 1 - stats.average) * 100;
+    if (pairs.length === 0) {
+      return {
+        average: null as number | null,
+        best: null as Pair | null,
+        worst: null as Pair | null,
+        valid: 0,
+        total,
+      };
+    }
+
+    const sorted = [...pairs].sort((a, b) => b.value - a.value);
+
+    return {
+      // 平均相关性用 Fisher z（与 lib/quant.ts 的 averageCorrelation 口径一致）
+      average: fisherAverageCorrelation(pairs.map((pair) => pair.value)),
+      best: sorted[0],
+      worst: sorted[sorted.length - 1],
+      valid: pairs.length,
+      total,
+    };
+  }, [matrix, grid.samples, rows.length]);
+
+  // 1 − 平均相关性，只作同页对比的相对指标，截断到 0–100%
+  const diversity =
+    stats.average === null ? null : Math.min(100, Math.max(0, (1 - stats.average) * 100));
 
   function exportCsv() {
     const ordered = indexOrder.map((index) => rows[index]);
@@ -168,6 +212,7 @@ export default function CorrelationMatrix({
         <MatrixBody
           rows={rows}
           matrix={matrix}
+          samples={grid.samples}
           indexOrder={indexOrder}
           stats={stats}
           diversity={diversity}
@@ -181,6 +226,7 @@ export default function CorrelationMatrix({
 function MatrixBody({
   rows,
   matrix,
+  samples,
   indexOrder,
   stats,
   diversity,
@@ -188,8 +234,15 @@ function MatrixBody({
 }: {
   rows: ResearchRow[];
   matrix: (number | null)[][];
+  samples: number[][];
   indexOrder: number[];
-  stats: { average: number | null; best: Pair | null; worst: Pair | null };
+  stats: {
+    average: number | null;
+    best: Pair | null;
+    worst: Pair | null;
+    valid: number;
+    total: number;
+  };
   diversity: number | null;
   onRemove: (symbol: string) => void;
 }) {
@@ -198,7 +251,7 @@ function MatrixBody({
   return (
     <>
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 border-b border-border px-4 py-2 text-[10.5px] text-muted-foreground">
-        <span>
+        <span title={t("平均相关性用 Fisher z 计算，只统计样本达标的配对")}>
           {t("平均相关性")}{" "}
           <b
             className={`num ${
@@ -214,11 +267,18 @@ function MatrixBody({
             {diversity === null ? "--" : `${formatNumber(diversity, 0)}%`}
           </b>
         </span>
+        <span title={t("样本 ≥ 20 个交易日的配对才计入")}>
+          {t("有效配对")}{" "}
+          <b className={`num ${stats.valid < stats.total ? "text-muted-foreground" : "text-foreground"}`}>
+            {stats.valid}/{stats.total}
+          </b>
+        </span>
         {stats.best && (
           <span>
             {t("最高相关")}{" "}
             <b className="num text-foreground">
-              {stats.best.a}/{stats.best.b} {formatNumber(stats.best.value, 2)}
+              {rows[stats.best.i].symbol}/{rows[stats.best.j].symbol}{" "}
+              {formatNumber(stats.best.value, 2)}
             </b>
           </span>
         )}
@@ -226,7 +286,8 @@ function MatrixBody({
           <span>
             {t("最低相关")}{" "}
             <b className="num text-foreground">
-              {stats.worst.a}/{stats.worst.b} {formatNumber(stats.worst.value, 2)}
+              {rows[stats.worst.i].symbol}/{rows[stats.worst.j].symbol}{" "}
+              {formatNumber(stats.worst.value, 2)}
             </b>
           </span>
         )}
@@ -300,6 +361,10 @@ function MatrixBody({
                         style={{ background: same ? "var(--muted)" : cellColor(value) }}
                         title={`${rows[indexA].symbol} / ${rows[indexB].symbol}：${
                           value === null ? "--" : value.toFixed(3)
+                        }${
+                          same
+                            ? ""
+                            : ` · ${t("样本")} ${samples[indexA]?.[indexB] ?? 0}`
                         }`}
                       >
                         {value === null ? "--" : value.toFixed(2)}
@@ -315,6 +380,9 @@ function MatrixBody({
 
       <p className="border-t border-border px-4 py-2 text-[10px] text-muted-foreground">
         {t("绿=同涨同跌，红=反向；平均相关性越低、分散度越高。相关性会随行情变化，建议切换区间对比。")}
+      </p>
+      <p className="px-4 pb-2 text-[10px] leading-4 text-muted-foreground">
+        {t("样本 ≥ 20 个交易日的配对才计入；平均相关性用 Fisher z；悬停单元格可看共同交易日数。")}
       </p>
     </>
   );
