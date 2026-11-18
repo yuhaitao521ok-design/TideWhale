@@ -7,7 +7,9 @@ import {
   ALL_SYMBOLS_ID,
   MAX_BACKTEST_GROUP_NAME,
   MAX_BACKTEST_GROUPS,
+  MAX_WEIGHT_PERCENT,
   UNGROUPED_SYMBOLS_ID,
+  allocationOf,
   groupsOfSymbol,
   symbolsOf,
   type BacktestLibrary,
@@ -31,6 +33,10 @@ interface SymbolLibraryProps {
   onClearGroups: (symbol: string) => void;
   /** 拖动标签调整分组顺序 */
   onMoveGroup: (fromId: string, toId: string) => void;
+  /** 设置当前分组里某只标的的仓位百分比（合计由数据层限制在 100% 以内） */
+  onWeightChange: (symbol: string, percent: number) => void;
+  /** 清空当前分组的全部仓位（全部回到现金） */
+  onClearWeights: () => void;
   onClear: () => void;
   /** 整组回测（只在真实分组上可用） */
   onBatchBacktest: (groupId: string) => void;
@@ -38,6 +44,57 @@ interface SymbolLibraryProps {
 }
 
 const DRAG_THRESHOLD = 6;
+
+/** 仓位输入框：编辑期间保留原始文本，离开时回落到规范化后的百分比（支持小数） */
+function WeightInput({
+  symbol,
+  percent,
+  max,
+  onCommit,
+}: {
+  symbol: string;
+  percent: number;
+  max: number;
+  onCommit: (percent: number) => void;
+}) {
+  const { t } = useI18n();
+  const [draft, setDraft] = useState<string | null>(null);
+  const value = draft ?? (percent > 0 ? String(percent) : "");
+  const parsedDraft = draft === null ? null : Number.parseFloat(draft);
+  /** 输入值超过剩余额度：实际会被封顶，边框标红提示 */
+  const overLimit = parsedDraft !== null && Number.isFinite(parsedDraft) && parsedDraft > max;
+
+  return (
+    <label
+      className="relative shrink-0"
+      title={`${t("仓位百分比")} · ${t("最多")} ${max}%`}
+    >
+      <input
+        type="number"
+        inputMode="decimal"
+        min={0}
+        max={max}
+        step={1}
+        value={value}
+        placeholder="0"
+        aria-label={`${symbol} ${t("仓位百分比")}`}
+        onChange={(event) => {
+          const next = event.target.value;
+          setDraft(next);
+          const parsed = Number.parseFloat(next);
+          onCommit(Number.isFinite(parsed) ? parsed : 0);
+        }}
+        onBlur={() => setDraft(null)}
+        className={`num h-5 w-[46px] rounded border bg-card pl-1 pr-3 text-right text-[10.5px] text-foreground outline-none transition-colors focus:ring-1 focus:ring-accent/15 ${
+          overLimit ? "border-negative/60 focus:border-negative/70" : "border-border focus:border-accent/60"
+        }`}
+      />
+      <span className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 text-[9px] text-muted-foreground/70">
+        %
+      </span>
+    </label>
+  );
+}
 
 /**
  * 回测标的库：最近搜索自动收集 + 自定义分组（可多选）+ 整组回测。
@@ -56,6 +113,8 @@ export default function SymbolLibrary({
   onToggleGroup,
   onClearGroups,
   onMoveGroup,
+  onWeightChange,
+  onClearWeights,
   onClear,
   onBatchBacktest,
   batch,
@@ -86,6 +145,8 @@ export default function SymbolLibrary({
 
   const activeGroup = library.groups.find((group) => group.id === activeGroupId) ?? null;
   const members = symbolsOf(library, activeGroupId);
+  /** 当前口径的仓位分配：合计 ≤ 100，剩余部分自动按现金处理 */
+  const allocation = allocationOf(library, activeGroupId);
 
   function submitCreate() {
     const message = onCreateGroup(name);
@@ -347,6 +408,16 @@ export default function SymbolLibrary({
                   </button>
                 </>
               )}
+              {allocation.invested > 0 && (
+                <button
+                  type="button"
+                  onClick={onClearWeights}
+                  title={t("清空仓位")}
+                  className="rounded px-1 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-hover hover:text-foreground"
+                >
+                  {t("清空仓位")}
+                </button>
+              )}
               <button
                 type="button"
                 disabled={members.length === 0 || Boolean(batch?.running)}
@@ -368,6 +439,23 @@ export default function SymbolLibrary({
         </p>
       )}
 
+      {members.length > 0 && (
+        <div
+          className="mt-2 flex items-center gap-2"
+          title={t("仓位合计最多 100%，未分配部分按现金处理")}
+        >
+          <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full bg-accent transition-[width] duration-200"
+              style={{ width: `${allocation.invested}%` }}
+            />
+          </div>
+          <span className="num shrink-0 text-[9.5px] text-muted-foreground">
+            {t("仓位")} {allocation.invested}% · {t("现金")} {allocation.cash}%
+          </span>
+        </div>
+      )}
+
       <div className="mt-2 max-h-[248px] space-y-1 overflow-y-auto pr-0.5 scroll-thin">
         {members.length === 0 ? (
           <p className="py-1 text-[10px] leading-4 text-muted-foreground/70">
@@ -378,6 +466,12 @@ export default function SymbolLibrary({
             const active = symbol === currentSymbol;
             const memberships = groupsOfSymbol(library, symbol);
             const editing = editingSymbol === symbol;
+            const percent = allocation.percentOf[symbol] ?? 0;
+            // 该标的还剩余多少可分配额度（其余标的的仓位不能动，只能调整自己的）
+            const remaining = Math.max(
+              0,
+              MAX_WEIGHT_PERCENT - (allocation.invested - percent),
+            );
             return (
               <div
                 key={symbol}
@@ -397,6 +491,12 @@ export default function SymbolLibrary({
                   >
                     {symbol}
                   </button>
+                  <WeightInput
+                    symbol={symbol}
+                    percent={percent}
+                    max={remaining}
+                    onCommit={(value) => onWeightChange(symbol, value)}
+                  />
                   <button
                     type="button"
                     onClick={() => setEditingSymbol(editing ? null : symbol)}
@@ -465,6 +565,20 @@ export default function SymbolLibrary({
               </div>
             );
           })
+        )}
+        {members.length > 0 && allocation.cash > 0 && (
+          <div
+            className="mt-1 flex items-center gap-1 rounded-md border border-dashed border-border bg-muted/40 px-1.5 py-1"
+            title={t("未分配资金按现金处理，收益记 0%")}
+          >
+            <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[9px] font-medium text-muted-foreground">
+              {t("现金")}
+            </span>
+            <span className="text-[9.5px] text-muted-foreground/70">{t("收益记 0%")}</span>
+            <span className="num ml-auto text-[11px] text-muted-foreground">
+              {allocation.cash}%
+            </span>
+          </div>
         )}
       </div>
     </section>

@@ -9,6 +9,8 @@ import type { BacktestResult } from "@/lib/backtest";
 
 export interface BatchBacktestRow {
   symbol: string;
+  /** 仓位百分比（0–100）：该标的占本组总资金的比例；未设置时为 0 */
+  weight: number;
   totalReturn: number | null;
   benchmarkReturn: number | null;
   excessReturn: number | null;
@@ -23,6 +25,7 @@ export interface BatchBacktestRow {
 
 export const BATCH_SORT_KEYS = [
   "symbol",
+  "weight",
   "totalReturn",
   "benchmarkReturn",
   "excessReturn",
@@ -34,7 +37,11 @@ export const BATCH_SORT_KEYS = [
 export type BatchSortKey = (typeof BATCH_SORT_KEYS)[number];
 export type SortDirection = "asc" | "desc";
 
-export function buildBatchRow(symbol: string, result: BacktestResult): BatchBacktestRow {
+export function buildBatchRow(
+  symbol: string,
+  result: BacktestResult,
+  weight = 0,
+): BatchBacktestRow {
   const { stats } = result;
   const excessReturn =
     stats.totalReturn === null || stats.benchmarkReturn === null
@@ -43,6 +50,7 @@ export function buildBatchRow(symbol: string, result: BacktestResult): BatchBack
 
   return {
     symbol,
+    weight,
     totalReturn: stats.totalReturn,
     benchmarkReturn: stats.benchmarkReturn,
     excessReturn,
@@ -54,9 +62,10 @@ export function buildBatchRow(symbol: string, result: BacktestResult): BatchBack
   };
 }
 
-export function buildBatchError(symbol: string, message: string): BatchBacktestRow {
+export function buildBatchError(symbol: string, message: string, weight = 0): BatchBacktestRow {
   return {
     symbol,
+    weight,
     totalReturn: null,
     benchmarkReturn: null,
     excessReturn: null,
@@ -95,6 +104,56 @@ export function sortBatchRows(
     if (left === right) return 0;
     return (left - right) * sign;
   });
+}
+
+export interface BatchWeightedSummary {
+  /** 参与加权的仓位合计（0–100） */
+  invested: number;
+  /** 未分配部分，按现金处理（0–100，收益记 0%） */
+  cash: number;
+  /** Σ(仓位 ÷ 100 × 单只收益)；没有任何仓位时为 null */
+  totalReturn: number | null;
+  benchmarkReturn: number | null;
+  excessReturn: number | null;
+  /** 有效行的交易次数合计 */
+  tradeCount: number;
+}
+
+/**
+ * 仓位加权的组合贡献：每只标的按自己的仓位贡献「仓位 × 收益」，
+ * 未分配部分按现金（收益 0%）计。取数失败的标的按 0 收益计入（资金闲置），
+ * 这样合计始终是「相对总资金」的贡献，而不是单只收益的平均。
+ */
+export function weightedBatchSummary(rows: BatchBacktestRow[]): BatchWeightedSummary {
+  let invested = 0;
+  for (const row of rows) {
+    if (Number.isFinite(row.weight) && row.weight > 0) invested += row.weight;
+  }
+  invested = Math.round(Math.min(100, invested) * 10) / 10;
+
+  const contribute = (pick: (row: BatchBacktestRow) => number | null): number =>
+    rows.reduce((sum, row) => {
+      const weight = Number.isFinite(row.weight) ? Math.max(0, row.weight) : 0;
+      if (weight <= 0) return sum;
+      return sum + (weight / 100) * (pick(row) ?? 0);
+    }, 0);
+
+  const totalReturn = invested > 0 ? Math.round(contribute((row) => row.totalReturn) * 100) / 100 : null;
+  const benchmarkReturn =
+    invested > 0 ? Math.round(contribute((row) => row.benchmarkReturn) * 100) / 100 : null;
+  const excessReturn =
+    totalReturn === null || benchmarkReturn === null
+      ? null
+      : Math.round((totalReturn - benchmarkReturn) * 100) / 100;
+
+  return {
+    invested,
+    cash: Math.round((100 - invested) * 10) / 10,
+    totalReturn,
+    benchmarkReturn,
+    excessReturn,
+    tradeCount: rows.reduce((sum, row) => sum + row.tradeCount, 0),
+  };
 }
 
 /** 把代码列表切成固定大小的小批（顺序不变） */
