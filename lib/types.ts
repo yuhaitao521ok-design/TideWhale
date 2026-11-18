@@ -122,6 +122,11 @@ export interface ChartPoint {
   high: number | null;
   low: number | null;
   close: number;
+  /**
+   * 复权收盘价（Yahoo 提供；用于研究 / 相关性，拆股分红不会产生假收益）。
+   * Nasdaq 兜底没有复权数据时为缺省，使用方回退到 `close`。
+   */
+  adjClose?: number | null;
   volume: number | null;
 }
 

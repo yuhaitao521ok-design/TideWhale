@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  adjustedClose,
   alignReturns,
   alphaBeta,
   correlationByTime,
@@ -142,6 +143,14 @@ test("alphaBeta：样本不足或基准无波动时返回 null", () => {
     r: Math.sin(index / 4) * 0.01,
   }));
   assert.equal(alphaBeta(moving, flat).beta, null);
+});
+
+test("adjustedClose：优先复权价，缺失 / 非法值回退原始收盘价", () => {
+  assert.equal(adjustedClose({ close: 100, adjClose: 71.2 }), 71.2);
+  assert.equal(adjustedClose({ close: 100 }), 100);
+  assert.equal(adjustedClose({ close: 100, adjClose: null }), 100);
+  assert.equal(adjustedClose({ close: 100, adjClose: Number.NaN }), 100);
+  assert.equal(adjustedClose({ close: 100, adjClose: 0 }), 100);
 });
 
 test("timedReturns：跳过零价样本并保留时间戳", () => {
