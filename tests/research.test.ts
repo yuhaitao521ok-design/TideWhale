@@ -2,12 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  MIN_CORRELATION_SAMPLES,
   alphaBeta,
   averageCorrelation,
   correlationByTime,
   drawdownProfile,
   drawdownSeries,
   equallyWeightedSeries,
+  fisherAverageCorrelation,
   monthlyReturns,
   normalizedSeries,
   rollingCorrelation,
@@ -111,7 +113,7 @@ test("trendStructure：单边上涨 → 共振 4 分、正在新高", () => {
   assert.equal(trend.fromHigh, 0);
 });
 
-test("seriateCorrelation：高相关的一对排在一起", () => {
+test("seriateCorrelation：高相关的一对相邻", () => {
   const matrix = [
     [1, 0.1, 0.9],
     [0.1, 1, 0.15],
@@ -119,13 +121,37 @@ test("seriateCorrelation：高相关的一对排在一起", () => {
   ];
   const order = seriateCorrelation(matrix);
   assert.equal(order.length, 3);
-  assert.deepEqual([...order.slice(0, 2)].sort(), [0, 2]);
-  assert.equal(order[2], 1);
+  const position = new Map(order.map((value, index) => [value, index]));
+  assert.equal(Math.abs(position.get(0)! - position.get(2)!), 1);
+});
+
+test("seriateCorrelation：两组独立板块各自连续，缺失值不影响排列", () => {
+  const size = 6;
+  const matrix = Array.from({ length: size }, (_, row) =>
+    Array.from({ length: size }, (_, column) => {
+      if (row === column) return 1;
+      // 第 6 只标的样本不足（null），不应把两个板块拆开
+      if (row === 5 || column === 5) return null;
+      return Math.floor(row / 3) === Math.floor(column / 3) ? 0.9 : 0.05;
+    }),
+  );
+
+  const order = seriateCorrelation(matrix);
+  assert.deepEqual([...order].sort((a, b) => a - b), [0, 1, 2, 3, 4, 5]);
+
+  const position = new Map(order.map((value, index) => [value, index]));
+  const contiguous = (members: number[]) => {
+    const spots = members.map((member) => position.get(member)!).sort((a, b) => a - b);
+    return spots.every((spot, index) => index === 0 || spot === spots[index - 1] + 1);
+  };
+  assert.ok(contiguous([0, 1, 2]));
+  assert.ok(contiguous([3, 4]));
 });
 
 test("correlationByTime / averageCorrelation：同序列相关性为 1", () => {
-  const a = timed([0.01, -0.02, 0.03, 0.015, -0.01, 0.02, 0.005, -0.005, 0.012, 0.008]);
-  const b = timed([0.01, -0.02, 0.03, 0.015, -0.01, 0.02, 0.005, -0.005, 0.012, 0.008]);
+  const values = Array.from({ length: 30 }, (_, index) => Math.sin(index / 3) * 0.01);
+  const a = timed(values);
+  const b = timed(values);
   assert.equal(correlationByTime(a, b), 1);
   assert.equal(
     averageCorrelation([
@@ -134,6 +160,28 @@ test("correlationByTime / averageCorrelation：同序列相关性为 1", () => {
     ]),
     1,
   );
+});
+
+test("correlationByTime / averageCorrelation：共同交易日少于门槛返回 null", () => {
+  const values = Array.from({ length: MIN_CORRELATION_SAMPLES - 5 }, (_, index) => (index % 2 ? 0.01 : -0.01));
+  const short = timed(values);
+  assert.equal(correlationByTime(short, short), null);
+  assert.equal(
+    averageCorrelation([
+      { symbol: "A", returns: short },
+      { symbol: "B", returns: short },
+    ]),
+    null,
+  );
+});
+
+test("fisherAverageCorrelation：先 z 变换再平均，比算术平均更接近真实相关", () => {
+  assert.equal(fisherAverageCorrelation([]), null);
+  assert.equal(fisherAverageCorrelation([1, 1]), 1);
+  const value = fisherAverageCorrelation([0.9, 0.1]);
+  // tanh((atanh(0.9) + atanh(0.1)) / 2) ≈ 0.656
+  assert.ok(value !== null && Math.abs(value - 0.656) < 0.002);
+  assert.ok(value !== null && value > 0.5);
 });
 
 test("rollingCorrelation：同序列滚动值恒为 1", () => {
