@@ -588,19 +588,43 @@ export function timedReturns(points: ChartPoint[]): TimedReturn[] {
   return output;
 }
 
-/** 按时间戳取两条收益序列的交集（不同市场交易日不同，不能按下标硬对齐） */
-export function alignReturns(a: TimedReturn[], b: TimedReturn[]): { a: number[]; b: number[] } {
-  const map = new Map<number, number>();
-  for (const item of b) map.set(item.t, item.r);
-  const left: number[] = [];
-  const right: number[] = [];
-  for (const item of a) {
-    const match = map.get(item.t);
-    if (match === undefined) continue;
-    left.push(item.r);
-    right.push(match);
+/**
+ * 统一到「UTC 交易日」：Yahoo 日线的时间戳是交易所开盘时间（美股 13:30/14:30 UTC），
+ * Nasdaq 兜底是午夜（00:00 UTC），两者必须归一到同一天才能对齐。
+ */
+function tradingDay(t: number): number {
+  return Math.floor(t / 86_400);
+}
+
+export interface AlignedReturns {
+  /** 与 b 对齐后的 a 收益（按时间升序） */
+  a: number[];
+  /** 与 a 对齐后的 b 收益（按时间升序） */
+  b: number[];
+  /** 对齐后每个样本的交易日时间戳（取 a 侧的原值，供图表横轴使用） */
+  t: number[];
+}
+
+/**
+ * 按交易日取两条收益序列的交集（不同市场休市日不同、不同数据源时间戳不同，
+ * 不能按秒级时间戳或下标硬对齐）。同一天有多条时保留最后一条。
+ */
+export function alignReturns(a: TimedReturn[], b: TimedReturn[]): AlignedReturns {
+  const left = new Map<number, TimedReturn>();
+  for (const item of a) left.set(tradingDay(item.t), item);
+  const right = new Map<number, TimedReturn>();
+  for (const item of b) right.set(tradingDay(item.t), item);
+
+  const days = [...left.keys()].filter((day) => right.has(day)).sort((x, y) => x - y);
+  const aligned: AlignedReturns = { a: [], b: [], t: [] };
+  for (const day of days) {
+    const itemA = left.get(day)!;
+    const itemB = right.get(day)!;
+    aligned.a.push(itemA.r);
+    aligned.b.push(itemB.r);
+    aligned.t.push(itemA.t);
   }
-  return { a: left, b: right };
+  return aligned;
 }
 
 /**
@@ -725,14 +749,16 @@ export function averageCorrelation(series: TimedSeries[]): number | null {
   return Number((total / pairs.length).toFixed(3));
 }
 
-/** 滚动相关性（默认 60 个交易日），按时间戳对齐 */
+/**
+ * 滚动相关性（默认 60 个交易日），按交易日对齐。
+ * 返回的时间戳取对齐后的样本日期（缺失日会被跳过，不能直接用原始序列下标）。
+ */
 export function rollingCorrelation(
   stock: TimedReturn[],
   benchmark: TimedReturn[],
   window = 60,
 ): { t: number; value: number }[] {
   const aligned = alignReturns(stock, benchmark);
-  const timestamps = stock.map((item) => item.t);
   const output: { t: number; value: number }[] = [];
   if (window < 8) return output;
   for (let index = window; index <= aligned.a.length; index += 1) {
@@ -741,7 +767,7 @@ export function rollingCorrelation(
       aligned.b.slice(index - window, index),
     );
     if (value === null) continue;
-    output.push({ t: timestamps[index - 1], value: Number(value.toFixed(4)) });
+    output.push({ t: aligned.t[index - 1], value: Number(value.toFixed(4)) });
   }
   return output;
 }
