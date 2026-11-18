@@ -6,6 +6,7 @@ import { useI18n } from "@/lib/i18n";
 import { formatNumber, formatPercent } from "@/lib/format";
 import {
   sortBatchRows,
+  weightedBatchSummary,
   type BatchBacktestRow,
   type BatchSortKey,
   type SortDirection,
@@ -25,6 +26,7 @@ interface BatchResultsProps {
 
 const COLUMNS: { key: BatchSortKey; label: string; align: "left" | "right" }[] = [
   { key: "symbol", label: "标的", align: "left" },
+  { key: "weight", label: "仓位", align: "right" },
   { key: "totalReturn", label: "策略收益", align: "right" },
   { key: "benchmarkReturn", label: "买入持有", align: "right" },
   { key: "excessReturn", label: "超额收益", align: "right" },
@@ -56,6 +58,8 @@ export default function BatchResults({
 
   const sorted = sortBatchRows(rows, sortKey, direction);
   const validRows = rows.filter((row) => !row.error && row.totalReturn !== null);
+  /** 按仓位加权的组合贡献（未分配部分按现金、收益 0% 计） */
+  const weighted = weightedBatchSummary(rows);
   const average = (pick: (row: BatchBacktestRow) => number | null): number | null => {
     const values = validRows
       .map((row) => pick(row))
@@ -106,7 +110,7 @@ export default function BatchResults({
       </div>
 
       <div className="max-h-[320px] overflow-auto scroll-thin">
-        <table className="w-full min-w-[640px] text-[11.5px]">
+        <table className="w-full min-w-[720px] text-[11.5px]">
           <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
             <tr className="text-[10px] text-muted-foreground">
               {COLUMNS.map((column) => {
@@ -157,6 +161,9 @@ export default function BatchResults({
                     </span>
                   )}
                 </td>
+                <td className="num px-3 py-1.5 text-right text-muted-foreground">
+                  {row.weight > 0 ? `${formatNumber(row.weight, 1)}%` : "—"}
+                </td>
                 {row.error ? (
                   <td
                     className="px-3 py-1.5 text-[10px] text-muted-foreground"
@@ -194,6 +201,24 @@ export default function BatchResults({
                 )}
               </tr>
             ))}
+            {!running && rows.length > 0 && weighted.invested > 0 && weighted.cash > 0 && (
+              <tr className="border-t border-dashed border-border/70 bg-muted/20 text-[11px]">
+                <td className="px-3 py-1.5">
+                  <span className="rounded bg-muted px-1 py-0.5 text-[9.5px] text-muted-foreground">
+                    {t("现金")}
+                  </span>
+                </td>
+                <td className="num px-3 py-1.5 text-right text-muted-foreground">
+                  {formatNumber(weighted.cash, 1)}%
+                </td>
+                <td className="num px-3 py-1.5 text-right text-muted-foreground">0.00%</td>
+                <td className="num px-3 py-1.5 text-right text-muted-foreground">0.00%</td>
+                <td className="num px-3 py-1.5 text-right text-muted-foreground">0.00%</td>
+                <td className="num px-3 py-1.5 text-right text-muted-foreground">0.00%</td>
+                <td className="num px-3 py-1.5 text-right text-muted-foreground">—</td>
+                <td className="num px-3 py-1.5 text-right text-muted-foreground">0</td>
+              </tr>
+            )}
             {running && rows.length === 0 && (
               <tr>
                 <td
@@ -209,6 +234,12 @@ export default function BatchResults({
             <tfoot>
               <tr className="border-t border-border bg-muted/30 text-[10.5px]">
                 <td className="px-3 py-1.5 font-medium">{t("组合平均")}</td>
+                <td
+                  className="num px-3 py-1.5 text-right text-muted-foreground"
+                  title={t("已分配仓位合计")}
+                >
+                  {formatNumber(weighted.invested, 1)}%
+                </td>
                 <td className="num px-3 py-1.5 text-right">
                   {formatPercent(average((row) => row.totalReturn))}
                 </td>
@@ -228,6 +259,31 @@ export default function BatchResults({
                   {rows.reduce((sum, row) => sum + row.tradeCount, 0)}
                 </td>
               </tr>
+              {weighted.invested > 0 && (
+                <tr
+                  className="border-t border-border bg-accent-soft/40 text-[10.5px]"
+                  title={t("Σ(仓位 × 单只收益) + 现金 × 0%；回撤与夏普无法由单只结果加权")}
+                >
+                  <td className="px-3 py-1.5 font-medium text-accent">
+                    {t("仓位加权（含现金）")}
+                  </td>
+                  <td className="num px-3 py-1.5 text-right text-accent">100%</td>
+                  <td className="num px-3 py-1.5 text-right font-medium">
+                    {formatPercent(weighted.totalReturn)}
+                  </td>
+                  <td className="num px-3 py-1.5 text-right">
+                    {formatPercent(weighted.benchmarkReturn)}
+                  </td>
+                  <td className="num px-3 py-1.5 text-right">
+                    {formatPercent(weighted.excessReturn)}
+                  </td>
+                  <td className="num px-3 py-1.5 text-right text-muted-foreground">—</td>
+                  <td className="num px-3 py-1.5 text-right text-muted-foreground">—</td>
+                  <td className="num px-3 py-1.5 text-right text-muted-foreground">
+                    {weighted.tradeCount}
+                  </td>
+                </tr>
+              )}
             </tfoot>
           )}
         </table>
@@ -236,6 +292,11 @@ export default function BatchResults({
       <p className="border-t border-border/60 px-4 py-2 text-[10px] leading-4 text-muted-foreground">
         {t("点击表头排序，点击任意一行切换为当前回测标的；结果使用当前区间 / 周期 / 策略参数")}
       </p>
+      {weighted.invested > 0 && (
+        <p className="px-4 pb-2 text-[10px] leading-4 text-muted-foreground">
+          {t("仓位在标的库分配，未分配部分按现金（收益 0%）计；回撤与夏普无法由单只结果加权")}
+        </p>
+      )}
     </section>
   );
 }

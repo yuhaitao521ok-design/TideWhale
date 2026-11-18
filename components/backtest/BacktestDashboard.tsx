@@ -40,7 +40,10 @@ import {
   LIBRARY_KEY,
   MAX_BACKTEST_GROUPS,
   addSymbol,
+  allocationOf,
+  clearAllocation,
   clearSymbolGroups,
+  clearSymbols,
   createGroup,
   deleteGroup,
   emptyLibrary,
@@ -49,6 +52,7 @@ import {
   removeSymbol,
   renameGroup,
   sanitizeLibrary,
+  setSymbolWeight,
   symbolsOf,
   toggleSymbolGroup,
   type BacktestLibrary,
@@ -398,11 +402,20 @@ export default function BacktestDashboard() {
   }
 
   function clearLibrary() {
-    setLibrary((prev) => ({ ...prev, symbols: [], assignment: {} }));
+    setLibrary((prev) => clearSymbols(prev));
     setActiveGroupId(ALL_SYMBOLS_ID);
     batchRef.current += 1;
     batchAbortRef.current?.abort();
     setBatch(null);
+  }
+
+  /** 设置当前分组（口径）里某只标的的仓位百分比，合计由数据层限制在 100% 以内 */
+  function setLibraryWeight(symbol: string, percent: number) {
+    setLibrary((prev) => setSymbolWeight(prev, activeGroupId, symbol, percent));
+  }
+
+  function clearLibraryWeights() {
+    setLibrary((prev) => clearAllocation(prev, activeGroupId));
   }
 
   /* ------------------------------- 组合回测 ------------------------------- */
@@ -411,6 +424,8 @@ export default function BacktestDashboard() {
     const members = symbolsOf(library, groupId);
     const groupName = library.groups.find((group) => group.id === groupId)?.name ?? groupId;
     if (members.length === 0) return;
+    // 仓位快照：本次回测结果按「当前分组」的分配计算贡献（与回测参数一起冻住）
+    const allocation = allocationOf(library, groupId);
 
     batchAbortRef.current?.abort();
     const controller = new AbortController();
@@ -421,8 +436,9 @@ export default function BacktestDashboard() {
     setBatch({ groupName, range, interval, rows: [], running: true, done: 0, total });
 
     const rows = await mapWithConcurrency(members, 3, async (member) => {
+      const weight = allocation.percentOf[member] ?? 0;
       let row: BatchBacktestRow;
-      if (controller.signal.aborted) return buildBatchError(member, t("已取消"));
+      if (controller.signal.aborted) return buildBatchError(member, t("已取消"), weight);
       try {
         const response = await fetch(
           `/api/chart?symbol=${encodeURIComponent(member)}&range=${range}&interval=${interval}`,
@@ -432,9 +448,9 @@ export default function BacktestDashboard() {
         const data = (await response.json()) as { points?: ChartPoint[] };
         const series = data.points ?? [];
         if (series.length === 0) throw new Error(t("数据点不足，无法回测"));
-        row = buildBatchRow(member, runBacktest(series, params, interval));
+        row = buildBatchRow(member, runBacktest(series, params, interval), weight);
       } catch (err) {
-        row = buildBatchError(member, err instanceof Error ? err.message : t("加载失败"));
+        row = buildBatchError(member, err instanceof Error ? err.message : t("加载失败"), weight);
       }
 
       done += 1;
@@ -559,7 +575,7 @@ export default function BacktestDashboard() {
         </>
       }
     >
-      <div className="grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[400px_minmax(0,1fr)]">
         <aside className="min-w-0 space-y-3">
           <section className="rounded-xl border border-border bg-card p-3 shadow-[0_1px_2px_rgba(9,9,11,0.04)]">
             <p className="mb-2 flex items-center justify-between text-[11px] font-medium text-muted-foreground">
@@ -638,6 +654,8 @@ export default function BacktestDashboard() {
             onToggleGroup={toggleLibraryGroup}
             onClearGroups={clearLibraryGroups}
             onMoveGroup={moveLibraryGroup}
+            onWeightChange={setLibraryWeight}
+            onClearWeights={clearLibraryWeights}
             onClear={clearLibrary}
             onBatchBacktest={(groupId) => void runBatch(groupId)}
             batch={batch}

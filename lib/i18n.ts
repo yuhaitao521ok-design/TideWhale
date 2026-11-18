@@ -809,6 +809,17 @@ const ZH_HANT: Record<string, string> = {
   "正在加载组合行情": "正在載入組合行情",
   "点击切换回测标的": "點擊切換回測標的",
   "点击表头排序，点击任意一行切换为当前回测标的；结果使用当前区间 / 周期 / 策略参数": "點擊表頭排序，點擊任意一行切換為當前回測標的；結果使用當前區間 / 週期 / 策略參數",
+  "仓位": "倉位",
+  "仓位百分比": "倉位百分比",
+  "仓位合计最多 100%，未分配部分按现金处理": "倉位合計最多 100%，未分配部分按現金處理",
+  "清空仓位": "清空倉位",
+  "现金": "現金",
+  "收益记 0%": "收益記 0%",
+  "未分配资金按现金处理，收益记 0%": "未分配資金按現金處理，收益記 0%",
+  "已分配仓位合计": "已分配倉位合計",
+  "仓位加权（含现金）": "倉位加權（含現金）",
+  "仓位在标的库分配，未分配部分按现金（收益 0%）计；回撤与夏普无法由单只结果加权": "倉位在標的庫分配，未分配部分按現金（收益 0%）計；回撤與夏普無法由單只結果加權",
+  "Σ(仓位 × 单只收益) + 现金 × 0%；回撤与夏普无法由单只结果加权": "Σ(倉位 × 單只收益) + 現金 × 0%；回撤與夏普無法由單只結果加權",
 };
 
 /** 英文词典（key 为简体原文） */
@@ -1590,6 +1601,17 @@ const EN: Record<string, string> = {
   "正在加载组合行情": "Loading group charts",
   "点击切换回测标的": "Click to backtest this symbol",
   "点击表头排序，点击任意一行切换为当前回测标的；结果使用当前区间 / 周期 / 策略参数": "Click a header to sort; click a row to switch the current symbol. Results use the current range, interval and strategy parameters.",
+  "仓位": "Weight",
+  "仓位百分比": "Position weight",
+  "仓位合计最多 100%，未分配部分按现金处理": "Weights add up to at most 100%; anything unassigned is held as cash",
+  "清空仓位": "Clear weights",
+  "现金": "Cash",
+  "收益记 0%": "0% return",
+  "未分配资金按现金处理，收益记 0%": "Unassigned capital is held as cash with a 0% return",
+  "已分配仓位合计": "Total allocated weight",
+  "仓位加权（含现金）": "Weighted (incl. cash)",
+  "仓位在标的库分配，未分配部分按现金（收益 0%）计；回撤与夏普无法由单只结果加权": "Weights are allocated in the symbol library; unassigned capital is cash (0% return). Drawdown and Sharpe cannot be aggregated from single-name results.",
+  "Σ(仓位 × 单只收益) + 现金 × 0%；回撤与夏普无法由单只结果加权": "Σ(weight × single-name return) + cash × 0%; drawdown and Sharpe cannot be aggregated from single-name results",
 };
 
 const DICTIONARIES: Record<Locale, Record<string, string>> = {
