@@ -8,6 +8,7 @@ import { useNavStyle } from "@/lib/nav-style";
 
 const TABS = [
   { key: "market", href: "/", label: "行情" },
+  { key: "news", href: "/news", label: "新闻" },
   { key: "earnings", href: "/earnings", label: "财报站" },
   { key: "research", href: "/research", label: "量化研究" },
   { key: "backtest", href: "/backtest", label: "回测" },
@@ -39,6 +40,23 @@ function TabIcon({ tab, size = 22 }: { tab: string; size?: number }) {
           strokeLinecap="round"
           strokeLinejoin="round"
         />
+      )}
+      {tab === "news" && (
+        <>
+          <path
+            d="M4.5 5.5h10.5v13H4.5z"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M15 8.5h4.5V16a2.5 2.5 0 0 1-2.5 2.5h-2"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinejoin="round"
+          />
+          <path d="M7.2 8.8h4.6M7.2 11.6h4.6M7.2 14.4h2.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </>
       )}
       {tab === "earnings" && (
         <>

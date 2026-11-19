@@ -28,6 +28,7 @@
 - **CSV 导出**：把当前周期 + 间隔的 OHLCV 数据导出为 CSV（含交易所当地时间与 UTC，方便 Excel / Python 分析）
 - **多数据源自动降级**：Yahoo → Nasdaq →（可选）大模型兜底报价，页面明确标注来源
 - **AI 解读（可选）**：配置 `LLM_API_KEY`（或 `PERPLEXITY_API_KEY` / `DEEPSEEK_API_KEY`）后才会显示入口与面板；默认 Perplexity `sonar` 联网检索生成中文解读、要点、风险与引用链接。provider 可配：`LLM_PROVIDER`（AI 解读，默认 perplexity）、`QUOTE_LLM_PROVIDER`（报价兜底，默认 deepseek），也支持任意 OpenAI 兼容服务（如小米 MiMo，配 `LLM_BASE_URL`）
+- **新闻聚合（`/news`）**：美国大公司突发 + 国际市场要闻 + SEC 8-K 官方备案，11 个免 Key 源并发抓取、跨源标题去重、置顶突发按重要度排序；支持分类筛选、关键词搜索、60 秒自动刷新、点击标的直接跳行情
 - **深色行情终端风格**，移动端 / 桌面端自适应
 - **亮 / 暗双主题**：跟随系统并可手动切换，选择持久化到 localStorage
 - **界面风格参考 [OpenRouter](https://openrouter.ai)**：Roboto / Roboto Mono 字体、细边框卡片、靛紫强调色、克制的留白与字号层级
@@ -138,6 +139,7 @@ Yahoo 可能限流或临时不可用，项目会自动降级到 Nasdaq（见「�
 | `GET /api/markets` | 右栏市场全景：板块 11 个 + 跨资产 6 个（Yahoo → Nasdaq 板块 / Sina 黄金原油 兜底，缓存 30s） |
 | `GET /api/fear-greed` | CNN Business 恐惧贪婪指数：当前分数 / 档位、昨收与周 / 月 / 年对比、近 30 日走势（缓存 60s，失败只影响本卡片） |
 | `GET /api/indices` | 全球指数概览（美股 4 + 亚太 6），Yahoo → Nasdaq（美股）/ Sina（亚太与美股备用）多级兜底，缓存 30s |
+| `GET /api/news?q=Nvidia` | 新闻聚合：美国大公司与国际市场快讯 + SEC 8-K 快讯；`q` 走跨源搜索（Google News 7 天 + SEC 全文检索），`refresh=1` 强制刷新；缓存 90s / 宽限 15 分钟 |
 | `GET /api/search?q=英伟达` | 代码 / 公司名搜索（Yahoo 不可用时回退到内置热门列表） |
 | `GET /api/fundamentals?symbol=AAPL` | 基本面指标（Yahoo `quoteSummary`，失败时退到 Nasdaq summary + dividends；缓存 10 分钟） |
 | `GET /api/insight?symbol=AAPL&range=1M` | AI 解读（默认 Perplexity，provider 可切换；未配置 Key 返回 501） |
@@ -253,17 +255,18 @@ curl 'http://localhost:3000/api/chart?symbol=NVDA&range=1Y&interval=1wk' | jq '.
 
 ## 功能页（多页面）
 
-除首页行情看板外，另有四个独立功能页，顶部导航栏统一入口：
+除首页行情看板外，另有五个独立功能页，顶部导航栏统一入口：
 
 | 页面 | 路由 | 内容 |
 | --- | --- | --- |
 | 行情 | `/` | 原有看板（自选股 / 图表 / 指数 / 市场全景），支持 `?symbol=AAPL` 直达 |
+| 新闻 | `/news` | **美国大公司突发 + 国际要闻 + SEC 8-K 官方备案**：11 个免 Key 源（CNBC / MarketWatch / Nasdaq / BBC / Guardian / Al Jazeera / Google News / SEC EDGAR）并发抓取，跨源标题相似度去重，按「来源权重 + 突发词 + 相关标的 + 时效 − 低价值内容」评分排序；置顶突发卡、按美东日期分组、来源徽标与相对时间、相关标的一键跳行情；右栏 SEC 8-K 快讯（事项中文标签：财报业绩 / 破产接管 / 完成收购 / 高管变动…）、热门标的、新闻源健康度；分类 tab（全部 / 突发 / 公司 / 市场 / 宏观 / 国际 / 官方 8-K）、关键词搜索（Google News 7 天窗口 + SEC 全文检索）、60 秒自动刷新 |
 | 财报站 | `/earnings` | 财报日历（按日期、市值/代码/EPS 排序，标盘前盘后）、EPS 实际 vs 预期、未来季度预期、三大报表（利润表 / 资产负债表 / 现金流） |
 | 量化研究 | `/research` | **自由标的池（搜索/输入代码随时增删，无数量上限，localStorage 持久化，按 8 只分批拉取；收益优先使用复权收盘价）**：因子表（共振分、动量 1M/3M/6M、年化波动、夏普、索提诺、最大回撤、回撤持续天数、胜率、Beta、年化 Alpha、区间收益，可排序、可逐只移除）、**因子说明**（27 个因子的含义 / 怎么读 / 参考区间 / 计算口径 + 「怎么看这张表」5 步 + 相关性矩阵阅读说明，点表头 i 直接定位高亮）、**相关性矩阵**（按共同交易日对齐、样本 ≥20 个交易日才计入、average-linkage 层次聚类 + 最优叶序排序、平均相关性用 Fisher z、分散度 / 有效配对覆盖度 / 最高最低相关对、悬停看共同交易日数、导出 CSV、逐行移除）、动量热力图、趋势结构（价>MA20 / 价>MA60 / 1M>0 / 6M>0 与共振分）、收益-风险象限、**等权组合 vs SPY**（净值曲线、年化 / 波动 / 夏普 / 回撤与分散化收益）、单只风险统计（含下行波动、卡玛、VaR/CVaR、偏度、峰度、跟踪误差、信息比率、上涨/下跌捕获、最长回撤与修复天数）、月度收益表、回撤水下图、60 日滚动相关性 |
 | 回测 | `/backtest` | **20 种策略可多选联动**（均线交叉 / EMA 交叉 / MACD 金叉 / PPO 金叉 / TRIX 金叉 / RSI 反转 / 随机指标 / 威廉 %R / CCI / BOLL 突破 / BOLL 均值回归 / 凯尔特纳 / 唐奇安（海龟）/ 价格站上均线 / 双动量 / 绝对动量 / ROC / ADX 趋势 / 连跌反转 / 量价突破 / 突破回踩），**每个策略悬停即显示「在做什么 / 优点 / 缺点」**（说明卡片固定高度，悬停与切换策略时列表不抖动），联动方式可选「任一信号 / 全部共振」；自定义**初始资金**；**回测区间 3月 / 6月 / 1年 / 5年 / 全部**，**K 线周期可选小时线 / 日线 / 周线 / 月线**（默认日线，按区间自动过滤数据不足的组合，年化与夏普按所选周期换算）；代码输入带搜索建议，**搜索过的代码自动进入「标的库」**（最近在前，最多 40 只；支持多分组归属、分组拖动排序与整组批量回测，**每只标的可设仓位百分比、不足 100% 自动显示现金并给出仓位加权贡献**，详见下文「回测标的库与组合回测」）；净值曲线左轴金额、右轴股价、底部时间轴，含渐变填充、初始资金参考线、买卖点标记与悬浮明细；12 项指标 + 逐笔交易（股数 / 盈亏 / 收益率 / 持有天数 / 出场原因） |
 | 机构持仓 | `/institutions` | **默认进入「调仓总览」Dashboard**（全部 30 位名人卡片（29 位 13F + 1 位国会披露）：**默认选中最新报告期，可切换最近 4 个季度**，每个季度选项标注已披露人数；头部显示已加载 / 已披露 / 净买入净卖出人数 / 合计净额；卡片展示所选季度净买入/净卖出、近 3 季迷你趋势、Top 加仓/减仓与数量，未披露该季的名人标注「本期未披露」并展示最新一期，不计入净额 / 人数 / Top 10；支持按净买入/净卖出筛选、按净额/名称排序，点击卡片直接进入详情；顶部另有跨机构 **加仓 / 减仓标的 Top 10**，按所选季度股数变动 × 季末价估算合计金额并显示参与机构数）；切到「名人 13F」标签（内置 30 位，含巴菲特 / 达利欧 / 索罗斯 / 西蒙斯 / 格里芬 / 德鲁肯米勒 / 霍华德·马克斯 / 张磊 / 段永平 / 李录等，支持按中英文名或基金名搜索）：左侧（移动端为横向滑动条）投资人列表，右侧投资人概览（总市值 / 持仓数 / 前十大集中度 / 报告期 / 提交日）、**前十大持仓可视化**（权重条）、**近期调仓**（最近 3 个季度对比上季 13F 的加仓 / 减仓 Top 10，含新建仓 / 清仓标签、加仓/减仓市值与近 3 季净买入/净卖出趋势）、**持仓明细**（按名称或 CUSIP 过滤、市值升/降序、占比条、股数/市值、较上季变动）；切到「按标的」可看机构持股比例、持仓变动统计、内部人买卖，带常用标的快捷切换与 400ms 防抖；**名人相关性**标签用最近 8 季 13F 反推的组合收益计算两两 Pearson 相关系数，提供相关性热力图、正/负相关 Top 5 与指标用法说明 |
 
-新增接口：`/api/earnings/calendar`、`/api/earnings/detail`、`/api/batch-chart`、`/api/institutions/ownership`、`/api/institutions/13f`。
+新增接口：`/api/news`、`/api/earnings/calendar`、`/api/earnings/detail`、`/api/batch-chart`、`/api/institutions/ownership`、`/api/institutions/13f`。
 
 - 13F 详情 / 总览：`GET /api/institutions/13f?investor=berkshire`、`?summary=1`（总览用精简摘要，每季保留前 10 条调仓）；带 `&refresh=1` 会绕过服务端 6 小时缓存重新请求 SEC（前端「刷新 / 刷新全部」走这个参数）
 - 名人相关性：`GET /api/institutions/correlation?investor=berkshire&quarters=8`，同样支持 `&refresh=1`
@@ -272,7 +275,7 @@ curl 'http://localhost:3000/api/chart?symbol=NVDA&range=1Y&interval=1wk' | jq '.
 - 财报 / 机构持仓走 Nasdaq 公开接口；名人 13F 走 SEC EDGAR（`data.sec.gov` + Archives XML，服务端解析并缓存 6 小时，需自定义 User-Agent）
 - 量化研究 / 回测全部在浏览器本地计算（`lib/quant.ts`、`lib/research-factors.ts` 因子词典、`lib/backtest.ts`、`lib/backtest-frame.ts`）；研究页按 8 只一批走 `/api/batch-chart` 并按「区间 + 代码」缓存，回测行情按所选周期（小时 / 日 / 周 / 月）走同一个 `/api/chart` 缓存
 - 研究页收益优先使用**复权收盘价**（Yahoo `adjclose`），拆股 / 分红不会制造假收益；Nasdaq 兜底没有复权数据，退回原始收盘价（页面已注明）。回测仍按原始 OHLC 成交，不受影响
-- 移动端底部标签栏同步为五个页面，**支持两种风格切换**（顶部导航右侧可切换，localStorage 持久化）：
+- 移动端底部标签栏同步为六个页面（行情 / 新闻 / 财报站 / 量化研究 / 回测 / 机构持仓），**支持两种风格切换**（顶部导航右侧可切换，localStorage 持久化）：
   - **水晶滑块**：渐隐毛玻璃底栏 + 随页面滑动的水晶指示块
   - **胶囊徽标**：悬浮胶囊容器 + 圆角方形图标徽标 + 渐变高亮（按下有压紧与水波纹反馈）
   - 两种都支持亮 / 暗配色与 iPhone 安全区；导航「行情」下拉仍可跳到首页各区块
@@ -292,6 +295,49 @@ curl 'http://localhost:3000/api/chart?symbol=NVDA&range=1Y&interval=1wk' | jq '.
 - 口径：金额是**披露档位**（如 `$50,001 - $100,000`），展示区间并额外用中值做排序与季度汇总；没有股数、没有持仓快照，所以持仓数 / 集中度 / 13F 净额、跨机构 Top 10、名人相关性**都不含国会成员**（`FUND_INVESTORS` 只保留 `source=13f`），避免两种口径混算
 - 缓存：索引与整份结果各缓存 6 小时，最多解析最近 6 份 PTR；扫描件（无文本层）会标记「解析失败」但不影响其它文件
 - 页面：总览卡片带「国会披露」徽标，详情页把「前十大持仓 / 持仓明细」换成**国会交易明细**（日期 / 类型 / 标的 / 资产 / 持有人 / 金额区间 + 原始 PTR 链接），「近期调仓」按交易日期所在季度汇总
+
+## 新闻聚合（`/news`）
+
+页面目标：**美国大公司每日突发消息** + **国际突发**，全部来自公开、免 Key 的接口，不依赖任何新闻 API 服务。
+
+| 源 | 地址 | 默认分类 | 说明 |
+| --- | --- | --- | --- |
+| CNBC Top News | `cnbc.com/id/100003114/device/rss/rss.html` | 公司 | 公司与市场头条，摘要质量高 |
+| CNBC World | `cnbc.com/id/100727362/device/rss/rss.html` | 国际 | 国际要闻 |
+| MarketWatch | `feeds.content.dowjones.io/public/rss/mw_topstories` | 市场 | 市场头条 |
+| MarketWatch Pulse | `feeds.content.dowjones.io/public/rss/mw_marketpulse` | 市场 | 盘中快讯 |
+| Nasdaq Markets | `nasdaq.com/feed/rssoutbound?category=Markets` | 市场 | 市场与个股分析 |
+| BBC Business | `feeds.bbci.co.uk/news/business/rss.xml` | 公司 | 全球商业 |
+| The Guardian | `theguardian.com/world/rss` | 国际 | 国际要闻 |
+| Al Jazeera | `aljazeera.com/xml/rss/all.xml` | 国际 | 中东与全球 |
+| Google News | `news.google.com/rss/search?q=…`（公司）/ `topic/WORLD`（国际） | 公司 / 国际 | 聚合检索；标题去掉「 - 来源」后缀，徽标展示真实媒体名（WSJ / Reuters…）；公司检索只保留主流媒体白名单 |
+| SEC EDGAR | `efts.sec.gov/LATEST/search-index?forms=8-K…` | 官方备案 | 8-K 全文检索，带公司名 / ticker / 事项编号 |
+
+处理管线（`lib/news.ts` + `lib/news-parse.ts`）：
+
+1. **并发抓取**：全部源同时请求，单源 8s 超时，`Promise.all` 内各自 try/catch，**单源失败只影响该源**（右栏「新闻源状态」会显示失败原因与耗时）；全部失败才返回 502。
+2. **容错解析**：只用正则处理 RSS 2.0 / Atom，兼容 CDATA、未转义 `&`、相对链接、RFC822 / ISO 时间；非 ISO 时间解析失败时回退到抓取时间，未来时间夹到当前时刻。
+3. **来源可信度**：Google News 是聚合器，公司检索只保留主流财经媒体白名单（Reuters / Bloomberg / WSJ / CNBC / NYT / Barron's / MarketWatch…），国际新闻走 `WORLD` 话题频道；卡片徽标展示真实媒体名，而不是笼统的「Google News」。
+4. **分类**：源默认分类 + 关键词覆盖（国际 > 宏观 > 公司 > 默认）；「公司」关键词包括 earnings / guidance / acquisition / layoffs / recall / FDA 等。
+5. **去重**：按「标题 Jaccard 相似度 ≥ 0.86」与「URL（去掉 query）相同」合并，保留分数高的一条，避免 CNBC / MarketWatch / Google News 重复推送同一事件。
+6. **评分**：`来源权重 + 突发词(+4) + 相关标的(+2) + 时效(+2/+1/−2) − 低价值内容(−3)`。低价值内容是「分析师目标价 / 均线穿越 / 52 周新高 / Should You Buy / 个人理财专栏」这类流水线，避免挤占置顶突发位。
+7. **缓存**：进程内 90s 新鲜期 + 15 分钟 stale 宽限（前端 60s 轮询，大约每两次请求命中一次缓存，避免每分钟都把 11 个源全抓一遍）；`?refresh=1` 会丢弃缓存并重新抓取（前端「刷新」按钮）。
+
+SEC 8-K 口径：
+
+- **大公司**（`lib/news-sources.ts` 的 `COMPANY_ALIASES`，约 58 家）：所有高信号事项都进右栏（1.01 协议 / 1.03 破产 / 2.01 收购 / 2.02 财报 / 2.05 裁员 / 5.02 高管变动…）
+- **小公司**：只保留 `1.03 破产 / 接管`、`2.01 完成收购 / 处置`、`3.01 退市` 三类真正重大的事件，避免每天数百条小公司例行 8-K 淹没新闻流
+- 事项编号在服务端转成中文标签，前端统一走 `t()` 支持三语；链接指向 SEC 的 filing index，不是转载页
+- 有搜索词时不过滤（`?q=Apple` 直接看 Apple 的全部 8-K）
+
+界面：
+
+- **置顶突发卡**：取分数最高的 `hot` 新闻，红色渐变底 + 呼吸圆点，标题加大、摘要两行截断
+- **新闻流**：按美东日期分组（今天 / 昨天 / 具体日期），组内**按发布时间倒序**（置顶卡单独按重要度选），每条带来源色条与徽标、相对时间（`Intl.RelativeTimeFormat`，随语言变化）、摘要、相关标的 chip（点击跳 `/?symbol=`）
+- **右栏**：SEC 8-K 快讯（默认 7 条，可展开全部）、热门标的（按新闻提及次数）、新闻源健康度（`<details>` 折叠，显示每源条数与耗时）
+- **工具栏**：分类胶囊 tab、关键词搜索、60 秒自动刷新开关、手动刷新；全部文案接 `t()`，桌面 / 移动端自适应（移动端单列，右栏落到主内容下方）
+
+维护提示：新增源只需在 `NEWS_SOURCES` 里加一条（`kind: "rss"` + `url` + `category` + `weight` + `limit`），无需改解析或前端；源站改版导致字段缺失时，该源会显示为失败而不影响其它源。
 
 ## 回测标的库与组合回测
 
@@ -520,9 +566,11 @@ app/
   page.tsx              页面入口
   layout.tsx            全局布局 / 元信息
   globals.css           Tailwind v4 主题与动效
+  news/page.tsx         新闻聚合页（美国大公司 + 国际 + SEC 8-K）
   api/
     quotes/route.ts     批量报价
     chart/route.ts      周期走势
+    news/route.ts       新闻聚合（RSS / Atom + SEC 全文检索）
     search/route.ts     代码搜索
     fundamentals/route.ts 基本面（市值 / 估值 / 分红）
     insight/route.ts    AI 解读（provider 可切换）
@@ -548,6 +596,10 @@ components/
   AlertToasts.tsx       提醒 toast
   FundamentalsCard.tsx  基本面卡片
   ThemeToggle.tsx       亮/暗主题切换
+  news/
+    NewsDashboard.tsx   新闻页（分类 / 搜索 / 自动刷新 / 布局）
+    NewsFeed.tsx        新闻流（按美东日期分组 + 卡片）
+    NewsAside.tsx       SEC 8-K 快讯 / 热门标的 / 源状态
   backtest/
     BacktestDashboard.tsx 回测页（状态 / 参数 / 快照对比）
     SymbolPicker.tsx      代码输入 + 搜索建议
@@ -566,6 +618,9 @@ lib/
   index-groups.ts       全球指数定义（代码 / 中文名 / 货币）
   markets.ts            板块热力 + 跨资产（右栏）数据编排
   fear-greed.ts         CNN 恐惧贪婪指数解析 / 分档（纯函数，客户端安全）
+  news-sources.ts       新闻源 / 公司别名 / 8-K 事项词典（纯常量）
+  news-parse.ts          新闻解析 / 分类 / 去重 / 评分 / SEC 8-K 解析（纯函数）
+  news.ts                新闻编排：并发抓取 + 缓存 + 搜索
   cnn.ts                CNN 恐惧贪婪指数适配器（取数 + 缓存）
   congress.ts           国会披露（众议院 Clerk PTR）取数 + PDF 文本抽取
   congress-parse.ts     国会 PTR 表格解析 / 索引解析 / 季度聚合（纯函数）
@@ -740,7 +795,7 @@ open-next.config.ts     OpenNext 适配器配置
 
 ## 界面与主题
 
-顶部导航（桌面端）只有 **行情** 一项（配 AI Key 时多一个「AI 解读」），按 OpenRouter 风格：14px 中等字重 + 图标，hover 浅底 + 底部强调色下划线。**hover / 点击「行情」展开下拉**，包含：
+顶部导航（桌面端）由「行情」下拉（配 AI Key 时多一个「AI 解读」）与五个功能页入口（新闻 / 财报站 / 量化研究 / 回测 / 机构持仓）组成，按 OpenRouter 风格：14px 中等字重 + 图标，hover 浅底 + 底部强调色下划线。**hover / 点击「行情」展开下拉**，包含：
 
 | 下拉项 | 跳转 | 说明 |
 | --- | --- | --- |

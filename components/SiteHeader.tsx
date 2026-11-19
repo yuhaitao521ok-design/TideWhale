@@ -23,6 +23,7 @@ const MARKET_ITEMS = [
 ];
 
 const PAGES = [
+  { key: "news", href: "/news", label: "新闻" },
   { key: "earnings", href: "/earnings", label: "财报站" },
   { key: "research", href: "/research", label: "量化研究" },
   { key: "backtest", href: "/backtest", label: "回测" },

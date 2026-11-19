@@ -100,3 +100,33 @@ export function formatFullTime(timestamp: number, timeZone: string): string {
     return date.toISOString();
   }
 }
+
+/**
+ * 相对时间（新闻流用）：刚刚 / 3 分钟前 / 2 小时前。
+ * 用 Intl.RelativeTimeFormat 按界面语言输出，不需要在词典里维护时间文案。
+ */
+const RELATIVE_FORMATTERS = new Map<string, Intl.RelativeTimeFormat>();
+
+function relativeFormatter(locale: string): Intl.RelativeTimeFormat {
+  const cached = RELATIVE_FORMATTERS.get(locale);
+  if (cached) return cached;
+  const formatter = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+  RELATIVE_FORMATTERS.set(locale, formatter);
+  return formatter;
+}
+
+export function formatRelativeTime(iso: string, locale: string, now = Date.now()): string {
+  const timestamp = Date.parse(iso);
+  if (!Number.isFinite(timestamp)) return "--";
+  const diffSeconds = Math.round((timestamp - now) / 1000);
+  const abs = Math.abs(diffSeconds);
+  try {
+    const formatter = relativeFormatter(locale);
+    if (abs < 60) return formatter.format(diffSeconds, "second");
+    if (abs < 3600) return formatter.format(Math.round(diffSeconds / 60), "minute");
+    if (abs < 86400) return formatter.format(Math.round(diffSeconds / 3600), "hour");
+    return formatter.format(Math.round(diffSeconds / 86400), "day");
+  } catch {
+    return new Date(timestamp).toISOString().slice(0, 16).replace("T", " ");
+  }
+}
