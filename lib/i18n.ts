@@ -879,6 +879,9 @@ const ZH_HANT: Record<string, string> = {
   "其他重大事件": "其他重大事件",
   "财务报表与附件": "財務報表與附件",
   "最新": "最新",
+  "标题与摘要已翻译为当前语言，原文链接保持不变。": "標題與摘要已翻譯為當前語言，原文連結保持不變。",
+  "部分新闻暂无翻译，显示英文原文。": "部分新聞暫無翻譯，顯示英文原文。",
+  "翻译服务暂不可用，显示英文原文。": "翻譯服務暫不可用，顯示英文原文。",
 };
 
 /** 英文词典（key 为简体原文） */
@@ -1730,6 +1733,9 @@ const EN: Record<string, string> = {
   "其他重大事件": "Other material events",
   "财务报表与附件": "Financial statements and exhibits",
   "最新": "Latest",
+  "标题与摘要已翻译为当前语言，原文链接保持不变。": "Headlines and summaries are translated into your language; source links stay in English.",
+  "部分新闻暂无翻译，显示英文原文。": "Some stories are not translated and remain in English.",
+  "翻译服务暂不可用，显示英文原文。": "Translation is unavailable; showing original English.",
 };
 
 const DICTIONARIES: Record<Locale, Record<string, string>> = {

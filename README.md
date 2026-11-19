@@ -28,7 +28,7 @@
 - **CSV 导出**：把当前周期 + 间隔的 OHLCV 数据导出为 CSV（含交易所当地时间与 UTC，方便 Excel / Python 分析）
 - **多数据源自动降级**：Yahoo → Nasdaq →（可选）大模型兜底报价，页面明确标注来源
 - **AI 解读（可选）**：配置 `LLM_API_KEY`（或 `PERPLEXITY_API_KEY` / `DEEPSEEK_API_KEY`）后才会显示入口与面板；默认 Perplexity `sonar` 联网检索生成中文解读、要点、风险与引用链接。provider 可配：`LLM_PROVIDER`（AI 解读，默认 perplexity）、`QUOTE_LLM_PROVIDER`（报价兜底，默认 deepseek），也支持任意 OpenAI 兼容服务（如小米 MiMo，配 `LLM_BASE_URL`）
-- **新闻聚合（`/news`）**：美国大公司突发 + 国际市场要闻 + SEC 8-K 官方备案，11 个免 Key 源并发抓取、跨源标题去重、置顶突发按重要度排序；支持分类筛选、关键词搜索、60 秒自动刷新、点击标的直接跳行情
+- **新闻聚合（`/news`）**：美国大公司突发 + 国际市场要闻 + SEC 8-K 官方备案，11 个免 Key 源并发抓取、跨源标题去重、置顶突发按重要度排序；支持分类筛选、关键词搜索、60 秒自动刷新、点击标的直接跳行情；**标题与摘要自动翻译为当前界面语言（简体 / 繁體），原文链接保持不变**
 - **深色行情终端风格**，移动端 / 桌面端自适应
 - **亮 / 暗双主题**：跟随系统并可手动切换，选择持久化到 localStorage
 - **界面风格参考 [OpenRouter](https://openrouter.ai)**：Roboto / Roboto Mono 字体、细边框卡片、靛紫强调色、克制的留白与字号层级
@@ -127,6 +127,7 @@ Yahoo 可能限流或临时不可用，项目会自动降级到 Nasdaq（见「�
 | --- | --- | --- |
 | `PERPLEXITY_API_KEY` | 否 | 配置后启用「AI 解读」，并在所有行情源失败时作为兜底报价 |
 | `PERPLEXITY_MODEL` | 否 | 默认 `sonar` |
+| `NEWS_TRANSLATE_PROVIDER` | 否 | 新闻标题 / 摘要翻译渠道：`google`（默认，免 Key）/ `mymemory` / `llm`（复用 LLM Key）/ `off` |
 
 不配置 AI Key 时，行情功能完全可用，页面不会显示 AI 入口与面板，主界面更简洁。
 
@@ -139,7 +140,7 @@ Yahoo 可能限流或临时不可用，项目会自动降级到 Nasdaq（见「�
 | `GET /api/markets` | 右栏市场全景：板块 11 个 + 跨资产 6 个（Yahoo → Nasdaq 板块 / Sina 黄金原油 兜底，缓存 30s） |
 | `GET /api/fear-greed` | CNN Business 恐惧贪婪指数：当前分数 / 档位、昨收与周 / 月 / 年对比、近 30 日走势（缓存 60s，失败只影响本卡片） |
 | `GET /api/indices` | 全球指数概览（美股 4 + 亚太 6），Yahoo → Nasdaq（美股）/ Sina（亚太与美股备用）多级兜底，缓存 30s |
-| `GET /api/news?q=Nvidia` | 新闻聚合：美国大公司与国际市场快讯 + SEC 8-K 快讯；`q` 走跨源搜索（Google News 7 天 + SEC 全文检索），`refresh=1` 强制刷新；缓存 90s / 宽限 15 分钟 |
+| `GET /api/news?q=Nvidia` | 新闻聚合：美国大公司与国际市场快讯 + SEC 8-K 快讯；`q` 走跨源搜索（Google News 7 天 + SEC 全文检索），`lang=zh-Hans/zh-Hant` 翻译标题与摘要，`refresh=1` 强制刷新；缓存 90s / 宽限 15 分钟 |
 | `GET /api/search?q=英伟达` | 代码 / 公司名搜索（Yahoo 不可用时回退到内置热门列表） |
 | `GET /api/fundamentals?symbol=AAPL` | 基本面指标（Yahoo `quoteSummary`，失败时退到 Nasdaq summary + dividends；缓存 10 分钟） |
 | `GET /api/insight?symbol=AAPL&range=1M` | AI 解读（默认 Perplexity，provider 可切换；未配置 Key 返回 501） |
@@ -339,6 +340,25 @@ SEC 8-K 口径：
 
 维护提示：新增源只需在 `NEWS_SOURCES` 里加一条（`kind: "rss"` + `url` + `category` + `weight` + `limit`），无需改解析或前端；源站改版导致字段缺失时，该源会显示为失败而不影响其它源。
 
+### 标题与摘要翻译（跟随界面语言）
+
+新闻正文来自英文源站，标题与摘要会在服务端翻译成当前界面语言（简体 / 繁體），英文界面保持原文。
+
+| 渠道 | 说明 |
+| --- | --- |
+| `google`（默认） | `translate.googleapis.com/translate_a/t?client=dict-chrome-ex`，免 Key，一次请求可翻 12 条，支持 `zh-CN` / `zh-TW` |
+| `mymemory` | MyMemory 公共接口，免 Key，用 `|||` 分隔批量（每批 6 条），作为兜底 |
+| `llm` | 复用现有 LLM Key（DeepSeek / Perplexity / OpenAI 兼容），质量最好，按 JSON 数组批量翻译 |
+| `off` | 关闭翻译，始终显示英文原文 |
+
+- 只翻标题与摘要：公司名、股票代码、SEC 8-K 公司与事项保留原文；摘要截断 160 字，且只翻前 40 条摘要以控制耗时
+- 条目级缓存 6 小时（key = 语言 + 原文 hash），同一新闻不会重复翻译；简繁缓存互相独立
+- 渠道按 `llm → google → mymemory` 降级，单渠道失败自动换下一个；单次请求总预算 8 秒，超出后保留英文原文
+- **繁體模式不使用 MyMemory 兜底**（它常把 `zh-TW` 返回成简体），Google 失败时直接保留英文，避免简繁混排
+- 语言切换只影响翻译层：11 个新闻源不会重新抓取（原始缓存 90s 复用）
+- 前端会显示翻译状态（已翻译 / 部分未翻译 / 翻译服务不可用），标题悬停可看英文原文
+- 本地实测：简体 / 繁體冷启动约 2–3 秒（含抓取 1.2s），标题覆盖约 99%；命中缓存后约 0.5 秒；英文界面不触发翻译
+
 ## 回测标的库与组合回测
 
 回测页左侧的「标的库」把**最近回测**升级成可管理的列表：
@@ -535,6 +555,7 @@ SEC 8-K 口径：
 | --- | --- | --- |
 | `PERPLEXITY_API_KEY` | Secret | 可选，启用 AI 解读与兜底报价 |
 | `PERPLEXITY_MODEL` | Text | 可选，默认 `sonar` |
+| `NEWS_TRANSLATE_PROVIDER` | Text | 可选，新闻翻译渠道：`google`（默认）/ `mymemory` / `llm` / `off` |
 
 ### 本地与命令行
 
@@ -620,7 +641,8 @@ lib/
   fear-greed.ts         CNN 恐惧贪婪指数解析 / 分档（纯函数，客户端安全）
   news-sources.ts       新闻源 / 公司别名 / 8-K 事项词典（纯常量）
   news-parse.ts          新闻解析 / 分类 / 去重 / 评分 / SEC 8-K 解析（纯函数）
-  news.ts                新闻编排：并发抓取 + 缓存 + 搜索
+  news-translate.ts      新闻标题 / 摘要翻译（Google / MyMemory / LLM + 缓存）
+  news.ts                新闻编排：并发抓取 + 缓存 + 搜索 + 本地化
   cnn.ts                CNN 恐惧贪婪指数适配器（取数 + 缓存）
   congress.ts           国会披露（众议院 Clerk PTR）取数 + PDF 文本抽取
   congress-parse.ts     国会 PTR 表格解析 / 索引解析 / 季度聚合（纯函数）
