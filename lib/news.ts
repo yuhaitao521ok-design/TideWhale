@@ -1,4 +1,5 @@
 import { cached, dropCache } from "@/lib/cache";
+import { localizeNews, type LocalizeResult } from "@/lib/news-translate";
 import {
   dedupeNews,
   hotTickers,
@@ -52,6 +53,13 @@ export interface NewsSourceStatus {
   error?: string;
 }
 
+export interface NewsTranslation {
+  locale: string;
+  provider: "llm" | "google" | "mymemory" | "none";
+  translated: number;
+  total: number;
+}
+
 export interface NewsPayload {
   items: NewsItem[];
   filings: NewsItem[];
@@ -61,9 +69,10 @@ export interface NewsPayload {
   cached: boolean;
   stale: boolean;
   query: string;
+  translation: NewsTranslation;
 }
 
-type NewsCore = Omit<NewsPayload, "cached" | "stale">;
+type NewsCore = Omit<NewsPayload, "cached" | "stale" | "translation">;
 
 async function fetchFeedXml(url: string): Promise<string> {
   const response = await fetch(url, {
@@ -191,13 +200,38 @@ async function loadNews(query: string): Promise<NewsCore> {
   };
 }
 
-/** 拉取新闻（带缓存）。`refresh` 会丢弃缓存并重新抓取所有源。 */
+/** 拉取新闻（带缓存）。`refresh` 会丢弃缓存并重新抓取所有源；`lang` 只影响翻译层，不会重新抓源。 */
 export async function getNews(
-  options: { query?: string; refresh?: boolean } = {},
+  options: { query?: string; refresh?: boolean; lang?: string } = {},
 ): Promise<NewsPayload> {
   const query = (options.query ?? "").trim().slice(0, 80);
   const key = `news:v1:${query || "*"}`;
   if (options.refresh) dropCache(key);
   const result = await cached(key, 90, 900, () => loadNews(query));
-  return { ...result.value, cached: result.cached, stale: result.stale };
+
+  let localized: LocalizeResult = {
+    items: result.value.items,
+    locale: options.lang ?? "",
+    provider: "none",
+    translated: 0,
+    total: 0,
+  };
+  try {
+    localized = await localizeNews(result.value.items, options.lang ?? "");
+  } catch {
+    // 翻译是增强功能：任何异常都退回英文原文，不影响新闻本身
+  }
+
+  return {
+    ...result.value,
+    items: localized.items,
+    translation: {
+      locale: localized.locale,
+      provider: localized.provider,
+      translated: localized.translated,
+      total: localized.total,
+    },
+    cached: result.cached,
+    stale: result.stale,
+  };
 }

@@ -47,6 +47,8 @@ export default function NewsDashboard() {
       try {
         const params = new URLSearchParams();
         if (appliedQuery) params.set("q", appliedQuery);
+        // 语言切换只影响翻译层：源站抓取结果复用同一份缓存
+        if (locale !== "en") params.set("lang", locale);
         if (refresh) params.set("refresh", "1");
         const query = params.toString();
         const response = await fetch(`/api/news${query ? `?${query}` : ""}`, { cache: "no-store" });
@@ -58,7 +60,7 @@ export default function NewsDashboard() {
         setLoading(false);
       }
     },
-    [appliedQuery],
+    [appliedQuery, locale],
   );
 
   useEffect(() => {
@@ -287,6 +289,7 @@ export default function NewsDashboard() {
               filings={data.filings ?? []}
               hot={data.hot ?? []}
               sources={data.sources ?? []}
+              translation={data.translation}
               onPickTicker={onPickTicker}
             />
           ) : (
@@ -349,6 +352,7 @@ function LeadCard({
           href={item.url}
           target="_blank"
           rel="noreferrer noopener"
+          title={item.titleOriginal}
           className="transition-colors hover:text-accent"
         >
           {item.title}

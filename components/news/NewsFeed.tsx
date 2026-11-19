@@ -159,6 +159,7 @@ function NewsCard({
           href={item.url}
           target="_blank"
           rel="noreferrer noopener"
+          title={item.titleOriginal}
           className="transition-colors hover:text-accent"
         >
           {item.title}

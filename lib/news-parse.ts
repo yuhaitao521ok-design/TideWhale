@@ -35,6 +35,9 @@ export interface NewsItem {
   source: string;
   /** Google News 聚合时的原始媒体名（用于展示与白名单过滤） */
   sourceDetail?: string;
+  /** 本地化后的英文原文（用于悬停对照，仅翻译时存在） */
+  titleOriginal?: string;
+  summaryOriginal?: string;
   category: NewsCategory;
   publishedAt: string;
   tickers: string[];

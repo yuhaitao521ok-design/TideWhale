@@ -3,18 +3,25 @@
 import { useMemo, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import type { NewsItem } from "@/lib/news-parse";
-import type { NewsSourceStatus } from "@/lib/news";
+import type { NewsSourceStatus, NewsTranslation } from "@/lib/news";
 import { EIGHT_K_ITEMS } from "@/lib/news-sources";
 
 interface NewsAsideProps {
   filings: NewsItem[];
   hot: { ticker: string; count: number }[];
   sources: NewsSourceStatus[];
+  translation?: NewsTranslation;
   onPickTicker: (ticker: string) => void;
 }
 
 /** 右栏：SEC 8-K 官方快讯 + 热门标的 + 新闻源健康度 */
-export default function NewsAside({ filings, hot, sources, onPickTicker }: NewsAsideProps) {
+export default function NewsAside({
+  filings,
+  hot,
+  sources,
+  translation,
+  onPickTicker,
+}: NewsAsideProps) {
   const { t, locale } = useI18n();
   const [expanded, setExpanded] = useState(false);
 
@@ -166,6 +173,16 @@ export default function NewsAside({ filings, hot, sources, onPickTicker }: NewsA
           </ul>
         </details>
       </section>
+
+      {translation && translation.total > 0 && (
+        <p className="px-1 text-[10px] leading-4 text-muted-foreground">
+          {translation.provider === "none"
+            ? t("翻译服务暂不可用，显示英文原文。")
+            : translation.translated < translation.total
+              ? t("部分新闻暂无翻译，显示英文原文。")
+              : t("标题与摘要已翻译为当前语言，原文链接保持不变。")}
+        </p>
+      )}
 
       <p className="px-1 text-[10px] leading-4 text-muted-foreground">
         {t("新闻来自公开 RSS 与 SEC EDGAR，可能存在延迟，仅供参考。")}
